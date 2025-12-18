@@ -11,6 +11,7 @@ CREATE TABLE twins (
   tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
+  settings JSONB DEFAULT '{"system_prompt": null}',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -27,9 +28,10 @@ CREATE TABLE users (
 CREATE TABLE sources (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   twin_id UUID REFERENCES twins(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
+  filename TEXT NOT NULL,
   file_url TEXT,
   content_text TEXT,
+  file_size BIGINT,
   status TEXT DEFAULT 'pending', -- pending, processed, error
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -68,6 +70,8 @@ CREATE TABLE escalations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
   status TEXT DEFAULT 'open', -- open, resolved, ignored
+  resolved_by UUID REFERENCES users(id),
+  resolved_at TIMESTAMP WITH TIME ZONE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

@@ -47,8 +47,23 @@ npm run dev
   - `main.py`: Application entry point.
   - `modules/`: Core logic modules (ingestion, retrieval, answering, escalation).
   - `modules/clients.py`: Centralized client initialization for OpenAI and Pinecone.
+  - `modules/schemas.py`: Pydantic models for API validation.
 - `frontend/`: Next.js 14 application using Tailwind CSS.
 - `supabase_schema.sql`: Database schema for Supabase.
+
+## System Dependencies
+
+### Supabase Tables
+- `twins`: (id, name, owner_id, settings)
+- `sources`: (id, twin_id, filename, file_size, status, created_at)
+- `conversations`: (id, twin_id, user_id, created_at)
+- `messages`: (id, conversation_id, role, content, confidence_score, citations, created_at)
+- `escalations`: (id, message_id, status, resolved_by, resolved_at)
+
+### Pinecone Configuration
+- **Metric**: Cosine
+- **Dimension**: 3072 (for `text-embedding-3-large`)
+- **Metadata Filtering**: Must filter by `twin_id`.
 
 ## Guidelines
 

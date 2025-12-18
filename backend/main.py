@@ -2,10 +2,11 @@ from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from modules.auth_guard import get_current_user, verify_owner
-from modules.ingestion import ingest_source
+from modules.ingestion import ingest_source, delete_source
 from modules.retrieval import retrieve_context
-from modules.answering import generate_answer, generate_answer_stream
-from modules.escalation import create_escalation
+from modules.agent import run_agent_stream
+from modules.memory import inject_verified_memory
+from modules.escalation import create_escalation, resolve_escalation as resolve_db_escalation
 from modules.observability import (
     log_interaction, 
     create_conversation, 
@@ -14,25 +15,41 @@ from modules.observability import (
     get_sources,
     supabase
 )
+from modules.schemas import (
+    ChatRequest, 
+    ChatMetadata, 
+    ChatContent, 
+    ChatDone, 
+    IngestionResponse,
+    EscalationSchema,
+    TwinSettingsUpdate
+)
 from modules.clients import get_pinecone_index, get_openai_client
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 import os
 import shutil
 import uuid
 import json
 import asyncio
+from typing import List
+from pydantic import BaseModel
 
 app = FastAPI(title="Verified Digital Twin Brain API")
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["*"], # Allow all for development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+class ResolutionRequest(BaseModel):
+    owner_answer: str
+
 @app.get("/health")
+# ... (keep health_check as is)
 async def health_check():
     health_status = {
         "status": "online",
@@ -59,54 +76,113 @@ async def health_check():
     return health_status
 
 @app.post("/chat/{twin_id}")
-async def chat(twin_id: str, query: str, conversation_id: str = None, user=Depends(get_current_user)):
-    # 1. Retrieval
-    contexts = retrieve_context(query, twin_id)
+async def chat(twin_id: str, request: ChatRequest, user=Depends(get_current_user)):
+    query = request.query
+    conversation_id = request.conversation_id
     
-    # 2. Logging
+    # 1. Logging User Message
     if not conversation_id:
         # Create a new conversation in Supabase
         conv = create_conversation(twin_id, user.get("user_id"))
         conversation_id = conv["id"] if conv else str(uuid.uuid4())
         
+    # 2. Get history (fetch BEFORE logging the new message to avoid duplicates)
+    history = []
+    if conversation_id:
+        msgs = get_messages(conversation_id)
+        # Convert to LangChain messages
+        for m in msgs[-5:]:
+            if m["role"] == "user":
+                history.append(HumanMessage(content=m["content"]))
+            else:
+                history.append(AIMessage(content=m["content"]))
+
     log_interaction(conversation_id, "user", query)
 
-    # Initial metrics from retrieval
-    avg_score = sum([c['score'] for c in contexts]) / len(contexts) if contexts else 0
-    citations = [c['source_id'] for c in contexts]
+    # 3. Get Twin Personality (System Prompt)
+    system_prompt = None
+    twin_res = supabase.table("twins").select("settings").eq("id", twin_id).single().execute()
+    if twin_res.data and twin_res.data.get("settings"):
+        system_prompt = twin_res.data["settings"].get("system_prompt")
 
     async def stream_generator():
-        # Send metadata first
-        yield json.dumps({
-            "type": "metadata", 
-            "confidence_score": avg_score, 
-            "citations": citations,
-            "conversation_id": conversation_id
-        }) + "\n"
+        # Variables to track final state
+        final_content = ""
+        citations = []
+        confidence_score = 0.0
+        sent_metadata = False
 
-        full_content = ""
-        async for chunk in generate_answer_stream(query, contexts):
-            full_content += chunk
-            yield json.dumps({"type": "content", "content": chunk}) + "\n"
+        async for event in run_agent_stream(twin_id, query, history, system_prompt):
+            # The event is a dict from LangGraph updates
+            if "tools" in event:
+                # Update citations and confidence from tool results
+                citations = event["tools"].get("citations", citations)
+                confidence_score = event["tools"].get("confidence_score", confidence_score)
+                
+                # Send metadata as soon as we have tool results (if not sent)
+                if not sent_metadata:
+                    metadata = ChatMetadata(
+                        confidence_score=confidence_score,
+                        citations=citations,
+                        conversation_id=conversation_id
+                    )
+                    yield metadata.model_dump_json() + "\n"
+                    sent_metadata = True
 
-        # 3. Final Logging
+            if "agent" in event:
+                msg = event["agent"]["messages"][-1]
+                if isinstance(msg, AIMessage) and msg.content:
+                    # We might get the full content here or chunks depending on how we set up LLM
+                    # In LangGraph updates mode, we usually get the full message at that node completion
+                    # For token-by-token, we'd need a different streaming setup.
+                    # For now, let's yield what we have.
+                    chunk = msg.content[len(final_content):]
+                    if chunk:
+                        final_content += chunk
+                        content_chunk = ChatContent(content=chunk)
+                        yield content_chunk.model_dump_json() + "\n"
+
+        # If metadata was never sent (e.g., no tool called), send it now
+        if not sent_metadata:
+            metadata = ChatMetadata(
+                confidence_score=confidence_score,
+                citations=citations,
+                conversation_id=conversation_id
+            )
+            yield metadata.model_dump_json() + "\n"
+
+        # 4. Final Logging
         msg = log_interaction(
             conversation_id, 
             "assistant", 
-            full_content, 
+            final_content, 
             citations, 
-            avg_score
+            confidence_score
         )
         
-        # 4. Escalation check
+        # 5. Escalation check
         escalated = False
-        if avg_score < 0.7:
+        if confidence_score < 0.7:
             await create_escalation(msg["id"])
             escalated = True
         
-        yield json.dumps({"type": "done", "escalated": escalated}) + "\n"
+        done = ChatDone(escalated=escalated)
+        yield done.model_dump_json() + "\n"
 
     return StreamingResponse(stream_generator(), media_type="application/x-ndjson")
+
+@app.post("/escalations/{escalation_id}/resolve")
+async def resolve_escalation(escalation_id: str, request: ResolutionRequest, user=Depends(verify_owner)):
+    try:
+        # 1. Update the database state (mark as resolved, add reply)
+        await resolve_db_escalation(escalation_id, user.get("user_id"), request.owner_answer)
+        
+        # 2. Inject into Pinecone for long-term memory
+        vector_id = await inject_verified_memory(escalation_id, request.owner_answer)
+        
+        return {"status": "success", "vector_id": vector_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/ingest/{twin_id}")
 async def ingest(twin_id: str, file: UploadFile = File(...), user=Depends(verify_owner)):
@@ -135,16 +211,55 @@ async def list_conversations(twin_id: str, user=Depends(get_current_user)):
 async def list_messages(conversation_id: str, user=Depends(get_current_user)):
     return get_messages(conversation_id)
 
+@app.delete("/sources/{twin_id}/{source_id}")
+async def remove_source(twin_id: str, source_id: str, user=Depends(verify_owner)):
+    try:
+        await delete_source(source_id, twin_id)
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/sources/{twin_id}")
 async def list_sources(twin_id: str, user=Depends(get_current_user)):
     return get_sources(twin_id)
 
-@app.get("/escalations")
+@app.get("/twins/{twin_id}")
+async def get_twin(twin_id: str, user=Depends(verify_owner)):
+    response = supabase.table("twins").select("*").eq("id", twin_id).single().execute()
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Twin not found")
+    return response.data
+
+@app.patch("/twins/{twin_id}")
+async def update_twin(twin_id: str, update: TwinSettingsUpdate, user=Depends(verify_owner)):
+    update_data = {k: v for k, v in update.model_dump().items() if v is not None}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No data to update")
+    
+    response = supabase.table("twins").update(update_data).eq("id", twin_id).execute()
+    return response.data
+
+@app.get("/escalations", response_model=List[EscalationSchema])
 async def list_escalations(user=Depends(verify_owner)):
     # Simple fetch for all escalations
     response = supabase.table("escalations").select("*, messages(*)").order("created_at", desc=True).execute()
     return response.data
 
+import socket
+
+def is_port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    
+    port = int(os.getenv("PORT", 8000))
+    host = os.getenv("HOST", "0.0.0.0")
+    
+    if is_port_in_use(port):
+        print(f"ERROR: Port {port} is already in use.")
+        print(f"Please kill the process using this port or set a different port via the PORT environment variable.")
+    else:
+        print(f"Starting server on {host}:{port}...")
+        uvicorn.run(app, host=host, port=port)

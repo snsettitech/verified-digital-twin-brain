@@ -22,12 +22,23 @@ def get_embedding(text: str):
     client = get_openai_client()
     response = client.embeddings.create(
         input=text,
-        model="text-embedding-3-large"
+        model="text-embedding-3-large",
+        dimensions=3072
     )
     return response.data[0].embedding
 
 async def ingest_source(source_id: str, twin_id: str, file_path: str, filename: str = None):
-    # 0. Record source in Supabase
+    # 0. Check for existing source with same name to handle "update"
+    if filename:
+        existing = supabase.table("sources").select("id").eq("twin_id", twin_id).eq("filename", filename).execute()
+        if existing.data:
+            print(f"File {filename} already exists. Updating source...")
+            # Delete old data first
+            old_source_id = existing.data[0]["id"]
+            await delete_source(old_source_id, twin_id)
+            # We keep the new source_id for the new record
+
+    # 0.1 Record source in Supabase
     if filename:
         file_size = os.path.getsize(file_path)
         supabase.table("sources").insert({
@@ -69,3 +80,24 @@ async def ingest_source(source_id: str, twin_id: str, file_path: str, filename: 
         supabase.table("sources").update({"status": "processed"}).eq("id", source_id).execute()
 
     return len(vectors)
+
+async def delete_source(source_id: str, twin_id: str):
+    """
+    Deletes a source from Supabase and its associated vectors from Pinecone.
+    """
+    # 1. Delete from Pinecone
+    index = get_pinecone_index()
+    try:
+        # Note: Delete by filter requires metadata indexing enabled or serverless index
+        index.delete(filter={
+            "source_id": {"$eq": source_id},
+            "twin_id": {"$eq": twin_id}
+        })
+    except Exception as e:
+        print(f"Error deleting from Pinecone: {e}")
+        # Continue to delete from Supabase even if Pinecone fails (maybe it was already gone)
+
+    # 2. Delete from Supabase
+    supabase.table("sources").delete().eq("id", source_id).eq("twin_id", twin_id).execute()
+    
+    return True

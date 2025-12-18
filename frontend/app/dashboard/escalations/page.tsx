@@ -6,25 +6,60 @@ import Link from 'next/link';
 export default function EscalationsPage() {
   const [escalations, setEscalations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [ownerAnswers, setOwnerAnswers] = useState<Record<string, string>>({});
+
+  const fetchEscalations = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/escalations', {
+        headers: { 'Authorization': 'Bearer development_token' }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setEscalations(data);
+      }
+    } catch (error) {
+      console.error('Error fetching escalations:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchEscalations = async () => {
-      try {
-        const response = await fetch('http://localhost:8000/escalations', {
-          headers: { 'Authorization': 'Bearer development_token' }
-        });
-        if (response.ok) {
-          const data = await response.json();
-          setEscalations(data);
-        }
-      } catch (error) {
-        console.error('Error fetching escalations:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchEscalations();
   }, []);
+
+  const handleResolve = async (id: string) => {
+    const answer = ownerAnswers[id];
+    if (!answer?.trim()) return;
+
+    setResolvingId(id);
+    try {
+      const response = await fetch(`http://localhost:8000/escalations/${id}/resolve`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer development_token' 
+        },
+        body: JSON.stringify({ owner_answer: answer })
+      });
+
+      if (response.ok) {
+        // Refresh the list
+        fetchEscalations();
+        // Clear answer for this id
+        setOwnerAnswers(prev => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }
+    } catch (error) {
+      console.error('Error resolving escalation:', error);
+    } finally {
+      setResolvingId(null);
+    }
+  };
 
   return (
     <div className="flex flex-col min-h-screen bg-[#f8fafc] text-slate-900 font-sans">
@@ -37,6 +72,7 @@ export default function EscalationsPage() {
             <Link href="/dashboard" className="text-sm font-medium text-slate-500 hover:text-slate-800">Chat</Link>
             <a href="#" className="text-sm font-medium text-slate-500 hover:text-slate-800">Knowledge Base</a>
             <Link href="/dashboard/escalations" className="text-sm font-bold text-blue-600 border-b-2 border-blue-600 pb-1">Escalations</Link>
+            <Link href="/dashboard/settings" className="text-sm font-medium text-slate-500 hover:text-slate-800">Settings</Link>
             <a href="#" className="text-sm font-medium text-slate-500 hover:text-slate-800">Analytics</a>
           </nav>
         </div>
@@ -93,6 +129,35 @@ export default function EscalationsPage() {
                       {(esc.messages?.confidence_score * 100).toFixed(0)}%
                     </div>
                   </div>
+
+                  {esc.status === 'open' && (
+                    <div className="pt-4 mt-4 border-t border-slate-50">
+                      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Your Verified Answer</div>
+                      <textarea
+                        className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all resize-none"
+                        placeholder="Provide the correct information to train your twin..."
+                        rows={3}
+                        value={ownerAnswers[esc.id] || ''}
+                        onChange={(e) => setOwnerAnswers({ ...ownerAnswers, [esc.id]: e.target.value })}
+                      />
+                      <div className="flex justify-end mt-3">
+                        <button
+                          onClick={() => handleResolve(esc.id)}
+                          disabled={resolvingId === esc.id || !ownerAnswers[esc.id]?.trim()}
+                          className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white text-xs font-bold py-2 px-6 rounded-lg transition-colors shadow-sm"
+                        >
+                          {resolvingId === esc.id ? 'Saving...' : 'Verify & Add to Memory'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {esc.status === 'resolved' && (
+                    <div className="pt-4 mt-4 border-t border-slate-50 flex items-center gap-2 text-green-600">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
+                      <span className="text-[10px] font-black uppercase tracking-widest">Knowledge Verified</span>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

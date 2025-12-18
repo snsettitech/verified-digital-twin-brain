@@ -9,6 +9,16 @@ interface Message {
   confidence_score?: number;
 }
 
+/**
+ * ChatInterface Component
+ * 
+ * The primary interface for interacting with a Digital Twin. 
+ * Supports streaming responses, conversation history, and real-time confidence/citation display.
+ * 
+ * @param twinId - The UUID of the digital twin being queried.
+ * @param conversationId - Optional existing conversation UUID to load history.
+ * @param onConversationStarted - Callback when a new conversation is initialized by the backend.
+ */
 export default function ChatInterface({ 
   twinId, 
   conversationId, 
@@ -28,7 +38,10 @@ export default function ChatInterface({
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Load history if conversationId changes
+  /**
+   * Fetches and loads message history for a given conversation.
+   * If no conversationId is provided, resets to the initial greeting.
+   */
   useEffect(() => {
     const loadHistory = async () => {
       if (!conversationId) {
@@ -71,6 +84,15 @@ export default function ChatInterface({
     scrollToBottom();
   }, [messages, loading]);
 
+  /**
+   * Sends a user query to the backend and processes the streaming NDJSON response.
+   * 
+   * Flow:
+   * 1. Add user message to UI.
+   * 2. Start streaming request to /chat/{twinId}.
+   * 3. Parse NDJSON chunks (metadata -> content -> done).
+   * 4. Update the last assistant message in real-time.
+   */
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
 
@@ -88,14 +110,17 @@ export default function ChatInterface({
 
     try {
       const url = new URL(`http://localhost:8000/chat/${twinId}`);
-      url.searchParams.append('query', input);
-      if (conversationId) url.searchParams.append('conversation_id', conversationId);
 
       const response = await fetch(url.toString(), {
         method: 'POST',
         headers: {
           'Authorization': 'Bearer development_token',
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({
+          query: input,
+          conversation_id: conversationId || null,
+        }),
       });
 
       if (!response.ok) {

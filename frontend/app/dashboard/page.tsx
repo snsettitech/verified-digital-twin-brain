@@ -28,6 +28,25 @@ export default function DashboardPage() {
     }
   };
 
+  const handleDeleteSource = async (sourceId: string) => {
+    if (!confirm('Are you sure you want to delete this source? This will remove it from your twin\'s memory.')) return;
+    
+    try {
+      const response = await fetch(`http://localhost:8000/sources/${activeTwin}/${sourceId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Bearer development_token' }
+      });
+      if (response.ok) {
+        await fetchSources();
+      } else {
+        alert('Failed to delete source.');
+      }
+    } catch (error) {
+      console.error('Error deleting source:', error);
+      alert('Error connecting to backend.');
+    }
+  };
+
   // Check system health on mount
   useEffect(() => {
     const checkHealth = async () => {
@@ -102,6 +121,7 @@ export default function DashboardPage() {
             <Link href="/dashboard" className="text-sm font-bold text-blue-600 border-b-2 border-blue-600 pb-1">Chat</Link>
             <a href="#" className="text-sm font-medium text-slate-500 hover:text-slate-800">Knowledge Base</a>
             <Link href="/dashboard/escalations" className="text-sm font-medium text-slate-500 hover:text-slate-800">Escalations</Link>
+            <Link href="/dashboard/settings" className="text-sm font-medium text-slate-500 hover:text-slate-800">Settings</Link>
             <a href="#" className="text-sm font-medium text-slate-500 hover:text-slate-800">Analytics</a>
           </nav>
         </div>
@@ -165,9 +185,16 @@ export default function DashboardPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`w-1.5 h-1.5 rounded-full ${doc.status === 'processed' ? 'bg-green-500' : 'bg-yellow-500'}`}></span>
-                    <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                      <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"></path></svg>
-                    </div>
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteSource(doc.id);
+                      }}
+                      className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-md transition-all"
+                      title="Delete Source"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
                   </div>
                 </div>
               ))}

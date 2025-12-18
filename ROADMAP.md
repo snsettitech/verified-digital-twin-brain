@@ -13,35 +13,54 @@ This roadmap outlines the evolution of the Verified Digital Twin Brain platform,
 
 ---
 
-## Next Milestone: Phase 2 - Trust & Verified Memory
-**Status: Pending**
+## Next Milestone: Phase 2 - Cloud Agents & Verified Memory
+**Status: Completed**
 
-The goal is to move from "AI answering" to "Owner verified" knowledge.
+The goal is to move from a local Q&A script to a **live, agentic cloud brain** that can reason and verify knowledge.
 
-- [ ] **Owner Escalation Inbox**: UI for owners to view and resolve low-confidence questions.
-- [ ] **Verified Memory Injection**: Automated process to turn owner's manual responses into high-priority vector embeddings.
-- [ ] **Enhanced Provenance**: Detailed UI showing exact document snippets used for answers.
-- [ ] **Twin Personalization**: System instructions and "Voice" configuration for different twins.
-
----
-
-## Future Milestone: Phase 3 - Assisted Work & Tool Integration
-**Status: Planned**
-
-Moving from answering questions to assisting with tasks with human-in-the-loop approvals.
-
-- [ ] **Drafting Workflows**: AI drafts emails, summaries, and documents for owner approval.
-- [ ] **Tool Connections**: Integration with Gmail, Slack, and Google Calendar.
-- [ ] **Approval Gates**: Every proposed action requires a "thumbs up" from the owner before execution.
+- [x] **Cloud Migration readiness**: Added `Procfile` and `railway.json` for cloud deployment.
+- [x] **Agentic Reasoning Loop**: Transitioned from static RAG to a dynamic LangGraph reasoning loop.
+- [x] **Verified Memory Injection**: Implemented logic to turn owner's manual responses into high-priority vector embeddings.
+- [x] **Early Tool Framework**: Established `modules/tools.py` architecture for future cloud tool expansion.
+- [x] **Advanced Reranking**: Implement a re-ranking layer (Cohere/BGE) to improve retrieval precision.
+- [x] **Owner Escalation Inbox**: UI for owners to view and resolve low-confidence questions.
+- [x] **Twin Personalization**: System instructions and basic persona configuration.
 
 ---
 
-## Long-term Vision: Phase 4 - Autonomous Accountability
+## Future Milestone: Phase 3 - Digital Persona & Multi-Modal Mind
+**Status: Planned (Pivoting to Delphi-style Architecture)**
+
+Moving from a basic RAG bot to a high-fidelity digital mind that clones the owner's knowledge and style.
+
+- [ ] **HyDE & Query Expansion**: Generate hypothetical answers to improve vector search depth.
+- [ ] **Context Enrichment**: Ingest documents with hypothetical questions and opinion/fact metadata tags.
+- [ ] **Multi-Modal Ingestion**: Scrapers for YouTube transcripts, Podcast audio (Whisper), and Social Media (Twitter/X threads).
+- [ ] **Persona Encoding**: Analysis of owner's writing style, common phrases, and opinion vectors for high-fidelity responses.
+- [ ] **Omni-channel Presence**: Development of embeddable web widgets and API for third-party integration (Delphi-style).
+- [ ] **Advanced Namespace Isolation**: Implementing robust multi-tenant isolation via Pinecone namespaces.
+
+---
+
+## Strategic Milestone: Phase 4 - Autonomous Action & Accountability
 **Status: Research**
 
 Full delegation within scoped permissions and rigorous audit trails.
 
+- [ ] **Self-Correction Loop**: Implement an agentic verification node to check answers against citations for hallucination prevention.
+- [ ] **Live App Integration**: Connect real-world tools (Gmail, Slack, Calendar) via Composio for active work.
+- [ ] **Autonomous Drafting**: AI handles complex requests and drafts responses across apps for owner approval.
 - [ ] **Policy Enforcement**: Define granular rules for what the twin can and cannot do autonomously.
-- [ ] **Multi-step Workflows**: Handling complex requests that require multiple tool interactions.
 - [ ] **Full Auditability**: Immutable log of every decision, source used, and action taken by the twin.
 
+---
+
+## Long-term Vision: Phase 5 - Scale & Ecosystem
+**Status: Visionary**
+
+Expanding the digital footprint and making the twin omnipresent.
+
+- [ ] **Multi-Modal Ingestion**: "Scrape" digital footprints including YouTube transcripts, Twitter threads, and Podcast audio (Whisper).
+- [ ] **Persona & Voice Cloning**: Advanced style-matching and ElevenLabs voice cloning to match the owner's identity perfectly.
+- [ ] **Omni-channel Distribution**: Deploy twins via WhatsApp, SMS, and embeddable web widgets.
+- [ ] **Enterprise Scale**: High-availability infrastructure for thousands of concurrent digital minds.

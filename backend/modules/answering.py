@@ -1,12 +1,11 @@
-from openai import OpenAI
+from modules.clients import get_openai_client
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
 def generate_answer(query: str, contexts: list):
+    client = get_openai_client()
     context_text = "\n\n".join([f"Source {i+1}: {c['text']}" for i, c in enumerate(contexts)])
     
     prompt = f"""
@@ -60,6 +59,7 @@ User Query: {query}
 Answer:
 """
 
+    client = get_openai_client()
     stream = client.chat.completions.create(
         model="gpt-4-turbo-preview",
         messages=[

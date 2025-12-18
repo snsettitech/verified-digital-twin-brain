@@ -21,6 +21,13 @@ You are an expert AI assistant specialized in building the **Verified Digital Tw
 - **Groundedness**: Every answer generated must be backed by a context retrieved from Pinecone.
 - **Citations**: Always structure responses to include source IDs or names.
 - **Escalation**: If retrieval scores are low or the AI is uncertain, ensure the logic flags the interaction for human review.
+- **Verified Memory (Phase 2)**: Future feature where owner responses are converted into high-priority vector embeddings to "fix" the twin's memory.
+- **Owner Escalation (Phase 2)**: A UI workflow where owners resolve low-confidence questions, providing the "Gold Standard" answer.
+
+## Debugging Protocol
+1. **Schema Check**: If a "column missing" error occurs, verify `supabase_schema.sql` against the model/ingestion code.
+2. **Connectivity**: Check `backend/modules/clients.py` and ensure env vars for Pinecone/OpenAI are set.
+3. **Traceback Analysis**: When analyzing backend logs, look for `postgrest.exceptions.APIError` for DB issues or `openai.APIError` for LLM issues.
 
 ## Architecture Laws
 1. **Multi-Tenancy**: Every database query and vector search must be filtered by `tenant_id` or `twin_id`.

@@ -1,6 +1,7 @@
 import requests
 import time
 import os
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -35,15 +36,22 @@ def test_rag_pipeline():
     print(f"Sending query: {query}")
     try:
         response = requests.post(
-            f"{BASE_URL}/chat/{twin_id}?query={query}",
+            f"{BASE_URL}/chat/{twin_id}",
+            json={"query": query},
             headers=HEADERS
         )
         response.raise_for_status()
-        data = response.json()
-        print("Response received!")
-        print(f"Answer: {data['answer'][:100]}...")
-        print(f"Confidence: {data.get('confidence_score', 0)}")
-        print(f"Citations: {data.get('citations', [])}")
+        
+        # Read the stream
+        print("Response received (streaming)...")
+        for line in response.iter_lines():
+            if line:
+                data = json.loads(line.decode('utf-8'))
+                if data.get("type") == "content":
+                    print(data.get("content"), end="", flush=True)
+                elif data.get("type") == "metadata":
+                    print(f"\n[Metadata] Confidence: {data.get('confidence_score')}")
+        print("\nChat test completed!")
         return True
     except Exception as e:
         print(f"Chat test failed: {e}")
