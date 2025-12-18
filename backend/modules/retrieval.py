@@ -1,24 +1,18 @@
 import os
-from pinecone import Pinecone
-from openai import OpenAI
-from dotenv import load_dotenv
-
-load_dotenv()
-
-pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-index = pc.Index(os.getenv("PINECONE_INDEX_NAME"))
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+from modules.clients import get_openai_client, get_pinecone_index
 
 def get_embedding(text: str):
+    client = get_openai_client()
     response = client.embeddings.create(
         input=text,
-        model="text-embedding-3-small"
+        model="text-embedding-3-large"
     )
     return response.data[0].embedding
 
 def retrieve_context(query: str, twin_id: str, top_k: int = 5):
     query_embedding = get_embedding(query)
     
+    index = get_pinecone_index()
     results = index.query(
         vector=query_embedding,
         top_k=top_k,

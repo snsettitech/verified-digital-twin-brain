@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 supabase
-pinecone-client
+pinecone
 openai
 pydantic
 python-dotenv

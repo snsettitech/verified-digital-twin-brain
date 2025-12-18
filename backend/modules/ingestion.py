@@ -2,15 +2,8 @@ import os
 import uuid
 from typing import List
 from PyPDF2 import PdfReader
-from pinecone import Pinecone
-from openai import OpenAI
-from dotenv import load_dotenv
-
-load_dotenv()
-
-pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-index = pc.Index(os.getenv("PINECONE_INDEX_NAME"))
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+from modules.clients import get_openai_client, get_pinecone_index
+from modules.observability import supabase
 
 def extract_text_from_pdf(file_path: str) -> str:
     reader = PdfReader(file_path)
@@ -26,13 +19,25 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[st
     return chunks
 
 def get_embedding(text: str):
+    client = get_openai_client()
     response = client.embeddings.create(
         input=text,
-        model="text-embedding-3-small"
+        model="text-embedding-3-large"
     )
     return response.data[0].embedding
 
-async def ingest_source(source_id: str, twin_id: str, file_path: str):
+async def ingest_source(source_id: str, twin_id: str, file_path: str, filename: str = None):
+    # 0. Record source in Supabase
+    if filename:
+        file_size = os.path.getsize(file_path)
+        supabase.table("sources").insert({
+            "id": source_id,
+            "twin_id": twin_id,
+            "filename": filename,
+            "file_size": file_size,
+            "status": "processing"
+        }).execute()
+
     # 1. Extract text
     text = extract_text_from_pdf(file_path)
     
@@ -40,6 +45,7 @@ async def ingest_source(source_id: str, twin_id: str, file_path: str):
     chunks = chunk_text(text)
     
     # 3. Generate embeddings and upsert to Pinecone
+    index = get_pinecone_index()
     vectors = []
     for i, chunk in enumerate(chunks):
         vector_id = str(uuid.uuid4())
@@ -58,4 +64,8 @@ async def ingest_source(source_id: str, twin_id: str, file_path: str):
     for i in range(0, len(vectors), 100):
         index.upsert(vectors[i:i + 100])
     
+    # Update status to processed
+    if filename:
+        supabase.table("sources").update({"status": "processed"}).eq("id", source_id).execute()
+
     return len(vectors)

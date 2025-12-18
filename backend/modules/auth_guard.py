@@ -7,8 +7,18 @@ load_dotenv()
 
 SECRET_KEY = os.getenv("JWT_SECRET", "secret")
 ALGORITHM = "HS256"
+DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
+DEV_TOKEN = "development_token"
 
 def get_current_user(authorization: str = Header(None)):
+    # Development bypass
+    if DEV_MODE and authorization == f"Bearer {DEV_TOKEN}":
+        return {
+            "user_id": "b415a7a9-c8f8-43b3-8738-a0062a90c016", 
+            "tenant_id": "986f270e-2d5c-4f88-ad88-7d2a15ea8ab1", 
+            "role": "owner"
+        }
+
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing authorization header")
     

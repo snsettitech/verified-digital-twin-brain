@@ -2,7 +2,7 @@
 
 A multi-tenant, Retrieval-Augmented Generation (RAG) platform designed to provide grounded, citation-backed answers from a verified knowledge base.
 
-## 🏗️ Architecture
+## Architecture
 
 ```mermaid
 graph TD
@@ -13,7 +13,7 @@ graph TD
   API --> LLM["OpenAI (GPT-4 & Embeddings)"]
 ```
 
-## 🚀 Features
+## Features
 
 - **Multi-Tenant Identity**: Tenant and Digital Twin resolution with built-in role enforcement (Owner vs. Viewer).
 - **Verified Ingestion**: Automated PDF text extraction, chunking, and vectorization into Pinecone.
@@ -21,13 +21,13 @@ graph TD
 - **Trust Layer**: Automated confidence scoring and escalation workflow for human-in-the-loop verification.
 - **Owner Dashboard**: Comprehensive console for monitoring twin performance and managing knowledge sources.
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 - **Frontend**: Next.js 14, Tailwind CSS, TypeScript, Supabase Auth.
 - **Backend**: FastAPI (Python), Pinecone, OpenAI, LangChain.
 - **Database**: PostgreSQL (Supabase).
 
-## 📥 Getting Started
+## Getting Started
 
 ### Prerequisites
 
@@ -59,12 +59,12 @@ npm run dev
 
 Run the `supabase_schema.sql` file in your Supabase SQL Editor to initialize the required tables.
 
-## 📂 Project Structure
+## Project Structure
 
 - `backend/`: FastAPI application and logic modules.
 - `frontend/`: Next.js application and components.
 - `supabase_schema.sql`: Database schema definition.
 
-## 📜 License
+## License
 
 MIT

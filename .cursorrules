@@ -1,0 +1,29 @@
+# Cursor Rules - Verified Digital Twin Brain
+
+## Project Context
+You are an expert AI assistant specialized in building the **Verified Digital Twin Brain**. This project is a high-trust RAG system that represents real people/organizations.
+
+## Coding Standards
+
+### Backend (FastAPI)
+- **Dependency Injection**: Always use `Depends()` for authentication and service injection.
+- **Client Management**: Use the centralized `modules/clients.py` for OpenAI and Pinecone access. Never initialize clients at the module level.
+- **Async First**: Use `async def` for API endpoints and I/O-bound operations.
+- **Error Handling**: Return clear HTTP exceptions with descriptive detail.
+
+### Frontend (Next.js)
+- **Framework**: Next.js 14+ (App Router).
+- **Styling**: Tailwind CSS.
+- **Components**: Prefer functional components and hooks.
+- **Data Fetching**: Use Supabase client for database interactions and standard `fetch` for the FastAPI backend.
+
+## Knowledge Representation
+- **Groundedness**: Every answer generated must be backed by a context retrieved from Pinecone.
+- **Citations**: Always structure responses to include source IDs or names.
+- **Escalation**: If retrieval scores are low or the AI is uncertain, ensure the logic flags the interaction for human review.
+
+## Architecture Laws
+1. **Multi-Tenancy**: Every database query and vector search must be filtered by `tenant_id` or `twin_id`.
+2. **Provenance**: Maintain the chain of custody from original document -> chunk -> vector -> response.
+3. **Security**: Environment variables must never be hardcoded. Use `.env` and `.env.local`.
+
