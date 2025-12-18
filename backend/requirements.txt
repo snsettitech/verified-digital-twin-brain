@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+supabase
+pinecone-client
+openai
+pydantic
+python-dotenv
+python-multipart
+langchain
+PyPDF2
+python-jose[cryptography]
+passlib[bcrypt]
