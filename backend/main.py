@@ -7,7 +7,11 @@ from modules.ingestion import (
     delete_source, 
     ingest_youtube_transcript,
     ingest_podcast_rss,
-    ingest_x_thread
+    ingest_x_thread,
+    approve_source,
+    reject_source,
+    bulk_approve_sources,
+    bulk_update_source_metadata
 )
 from modules.retrieval import retrieve_context
 from modules.agent import run_agent_stream
@@ -45,7 +49,11 @@ from modules.observability import (
     get_messages,
     get_sources,
     get_knowledge_profile,
-    supabase
+    supabase,
+    log_ingestion_event,
+    get_ingestion_logs,
+    get_dead_letter_queue,
+    retry_failed_ingestion
 )
 from modules.schemas import (
     ChatRequest, 
@@ -68,9 +76,23 @@ from modules.schemas import (
     GroupCreateRequest,
     GroupUpdateRequest,
     AssignUserRequest,
-    ContentPermissionRequest
+    ContentPermissionRequest,
+    SourceHealthCheckSchema,
+    TrainingJobSchema,
+    IngestionLogSchema,
+    BulkApproveRequest,
+    BulkUpdateRequest,
+    SourceRejectRequest
 )
 from modules.clients import get_pinecone_index, get_openai_client
+from modules.health_checks import get_source_health_status
+from modules.training_jobs import (
+    create_training_job,
+    get_training_job,
+    update_job_status,
+    list_training_jobs
+)
+from worker import process_single_job
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from typing import Dict, Any
 import os
@@ -133,9 +155,13 @@ async def chat(twin_id: str, request: ChatRequest, user=Depends(get_current_user
     if not group_id:
         # Check if conversation has a group_id set
         if conversation_id:
-            conv_response = supabase.table("conversations").select("group_id").eq("id", conversation_id).single().execute()
-            if conv_response.data and conv_response.data.get("group_id"):
-                group_id = conv_response.data["group_id"]
+            try:
+                conv_response = supabase.table("conversations").select("group_id").eq("id", conversation_id).single().execute()
+                if conv_response.data and conv_response.data.get("group_id"):
+                    group_id = conv_response.data["group_id"]
+            except Exception as e:
+                print(f"Warning: Could not fetch conversation group_id: {e}")
+                # Continue without group_id from conversation
         
         # If still no group_id, get user's default group
         if not group_id:
@@ -153,31 +179,50 @@ async def chat(twin_id: str, request: ChatRequest, user=Depends(get_current_user
     # 1. Logging User Message
     if not conversation_id:
         # Create a new conversation in Supabase with group_id
-        conv_data = {
-            "twin_id": twin_id,
-            "user_id": user.get("user_id"),
-            "group_id": group_id
-        }
-        conv_response = supabase.table("conversations").insert(conv_data).execute()
-        conversation_id = conv_response.data[0]["id"] if conv_response.data else str(uuid.uuid4())
+        try:
+            conv_data = {
+                "twin_id": twin_id,
+                "user_id": user.get("user_id"),
+                "group_id": group_id
+            }
+            conv_response = supabase.table("conversations").insert(conv_data).execute()
+            conversation_id = conv_response.data[0]["id"] if conv_response.data else str(uuid.uuid4())
+        except Exception as e:
+            print(f"Error creating conversation: {e}")
+            # Fallback: generate UUID and continue (conversation won't be saved but chat will work)
+            conversation_id = str(uuid.uuid4())
     else:
         # Update conversation with group_id if not already set
-        conv_response = supabase.table("conversations").select("group_id").eq("id", conversation_id).single().execute()
-        if conv_response.data and not conv_response.data.get("group_id"):
-            supabase.table("conversations").update({"group_id": group_id}).eq("id", conversation_id).execute()
+        try:
+            conv_response = supabase.table("conversations").select("group_id").eq("id", conversation_id).single().execute()
+            if conv_response.data and not conv_response.data.get("group_id"):
+                supabase.table("conversations").update({"group_id": group_id}).eq("id", conversation_id).execute()
+        except Exception as e:
+            print(f"Warning: Could not update conversation group_id: {e}")
+            # Continue even if update fails
         
     # 2. Get history (fetch BEFORE logging the new message to avoid duplicates)
     history = []
     if conversation_id:
-        msgs = get_messages(conversation_id)
-        # Convert to LangChain messages
-        for m in msgs[-5:]:
-            if m["role"] == "user":
-                history.append(HumanMessage(content=m["content"]))
-            else:
-                history.append(AIMessage(content=m["content"]))
+        try:
+            msgs = get_messages(conversation_id)
+            # Convert to LangChain messages
+            for m in msgs[-5:]:
+                if m.get("role") == "user":
+                    history.append(HumanMessage(content=m.get("content", "")))
+                elif m.get("role") == "assistant":
+                    history.append(AIMessage(content=m.get("content", "")))
+        except Exception as e:
+            print(f"Warning: Could not fetch message history: {e}")
+            # Continue without history if fetch fails
+            history = []
 
-    log_interaction(conversation_id, "user", query)
+    # Log user message (with error handling)
+    try:
+        log_interaction(conversation_id, "user", query)
+    except Exception as e:
+        print(f"Warning: Could not log user message: {e}")
+        # Continue even if logging fails
 
     # 3. Get Twin Personality (System Prompt)
     system_prompt = None
@@ -417,6 +462,207 @@ async def remove_source(twin_id: str, source_id: str, user=Depends(verify_owner)
 async def list_sources(twin_id: str, user=Depends(get_current_user)):
     return get_sources(twin_id)
 
+# Phase 6: Mind Ops Layer Endpoints
+
+@app.post("/sources/{source_id}/approve")
+async def approve_source_endpoint(source_id: str, user=Depends(verify_owner)):
+    """Approve staged source → creates training job"""
+    try:
+        job_id = await approve_source(source_id)
+        return {"status": "success", "job_id": job_id, "message": "Source approved, training job created"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/sources/{source_id}/reject")
+async def reject_source_endpoint(source_id: str, request: SourceRejectRequest, user=Depends(verify_owner)):
+    """Reject source with reason"""
+    try:
+        await reject_source(source_id, request.reason)
+        return {"status": "success", "message": "Source rejected"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/sources/bulk-approve")
+async def bulk_approve_sources_endpoint(request: BulkApproveRequest, user=Depends(verify_owner)):
+    """Bulk approve multiple sources"""
+    try:
+        results = await bulk_approve_sources(request.source_ids)
+        return {"status": "success", "results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/sources/bulk-update")
+async def bulk_update_sources_endpoint(request: BulkUpdateRequest, user=Depends(verify_owner)):
+    """Bulk update metadata (access group, publish_date, author, citation_url, visibility)"""
+    try:
+        await bulk_update_source_metadata(request.source_ids, request.metadata)
+        return {"status": "success", "message": f"Updated {len(request.source_ids)} source(s)"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/sources/{source_id}/health")
+async def get_source_health(source_id: str, user=Depends(get_current_user)):
+    """Get health check results for a source"""
+    try:
+        health_status = get_source_health_status(source_id)
+        return health_status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/sources/{source_id}/logs")
+async def get_source_logs(source_id: str, limit: int = 100, user=Depends(get_current_user)):
+    """Get ingestion logs for a source"""
+    try:
+        logs = get_ingestion_logs(source_id, limit=limit)
+        return logs
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/training-jobs")
+async def list_training_jobs_endpoint(twin_id: Optional[str] = None, status: Optional[str] = None, user=Depends(get_current_user)):
+    """List training jobs (with filters: status, twin_id)"""
+    try:
+        if not twin_id:
+            # Get twin_id from user context if available
+            # For now, require twin_id as query param
+            raise HTTPException(status_code=400, detail="twin_id query parameter is required")
+        jobs = list_training_jobs(twin_id, status=status)
+        return jobs
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/training-jobs/process-queue")
+async def process_queue_endpoint(twin_id: Optional[str] = None, user=Depends(verify_owner)):
+    """Process all queued jobs (on-demand, runs in API process)"""
+    from modules.job_queue import dequeue_job, get_queue_length
+    from modules.training_jobs import process_training_job
+    
+    processed = 0
+    failed = 0
+    max_jobs = 10  # Process up to 10 jobs per request to avoid timeout
+    
+    # First, try to process from queue
+    for _ in range(max_jobs):
+        job = dequeue_job()
+        if not job:
+            break
+        
+        job_id = job["job_id"]
+        try:
+            print(f"Processing job {job_id} from queue")
+            success = await process_training_job(job_id)
+            if success:
+                processed += 1
+            else:
+                failed += 1
+        except Exception as e:
+            print(f"Error processing job {job_id}: {e}")
+            failed += 1
+    
+    # Fallback: If queue is empty but there are queued jobs in DB, process them directly
+    # This handles cases where the in-memory queue was lost (server restart, etc.)
+    if processed == 0 and twin_id:
+        try:
+            queued_jobs = list_training_jobs(twin_id, status="queued", limit=max_jobs)
+            for job in queued_jobs:
+                job_id = job["id"]
+                try:
+                    print(f"Processing job {job_id} from database (queue was empty)")
+                    success = await process_training_job(job_id)
+                    if success:
+                        processed += 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    print(f"Error processing job {job_id}: {e}")
+                    failed += 1
+        except Exception as e:
+            print(f"Error fetching queued jobs from database: {e}")
+    
+    remaining = get_queue_length()
+    
+    return {
+        "status": "success",
+        "processed": processed,
+        "failed": failed,
+        "remaining": remaining,
+        "message": f"Processed {processed} job(s), {failed} failed, {remaining} remaining in queue"
+    }
+
+@app.get("/training-jobs/{job_id}")
+async def get_training_job_endpoint(job_id: str, user=Depends(get_current_user)):
+    """Get job details"""
+    try:
+        job = get_training_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Training job not found")
+        return job
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/training-jobs/{job_id}/retry")
+async def retry_training_job(job_id: str, user=Depends(verify_owner)):
+    """Retry failed job"""
+    try:
+        job = get_training_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Training job not found")
+        
+        # Get the error message from the job to provide context
+        previous_error = job.get("error_message", "Unknown error")
+        
+        # Reset job status and clear error
+        update_job_status(job_id, "queued", error_message=None)
+        
+        # Process the job
+        success = await process_single_job(job_id)
+        
+        if success:
+            return {"status": "success", "message": "Job retried successfully"}
+        else:
+            # Get the updated job to see the new error message
+            updated_job = get_training_job(job_id)
+            new_error = updated_job.get("error_message", "Job processing failed") if updated_job else "Job processing failed"
+            raise HTTPException(status_code=500, detail=f"Job processing failed: {new_error}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+        raise HTTPException(status_code=500, detail=error_detail)
+
+@app.get("/dead-letter-queue")
+async def get_dead_letter_queue_endpoint(twin_id: str, user=Depends(verify_owner)):
+    """List sources needing attention"""
+    try:
+        sources = get_dead_letter_queue(twin_id)
+        return sources
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/sources/{source_id}/retry")
+async def retry_source_ingestion(source_id: str, user=Depends(verify_owner)):
+    """Retry failed ingestion"""
+    try:
+        # Get twin_id from source
+        source_response = supabase.table("sources").select("twin_id").eq("id", source_id).single().execute()
+        if not source_response.data:
+            raise HTTPException(status_code=404, detail="Source not found")
+        
+        twin_id = source_response.data["twin_id"]
+        job_id = retry_failed_ingestion(source_id, twin_id)
+        return {"status": "success", "job_id": job_id, "message": "Retry initiated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/twins/{twin_id}/knowledge-profile", response_model=KnowledgeProfile)
 async def knowledge_profile(twin_id: str, user=Depends(get_current_user)):
     try:
@@ -523,7 +769,7 @@ async def list_twin_verified_qna(twin_id: str, visibility: Optional[str] = None,
     Optional visibility filter: 'private', 'shared', 'public'
     """
     try:
-        qna_list = await list_verified_qna(twin_id, visibility, group_id=group_id)
+        qna_list = await list_verified_qna(twin_id, visibility, group_id=None)
         # Format with citations and patches for each entry
         result = []
         for qna in qna_list:

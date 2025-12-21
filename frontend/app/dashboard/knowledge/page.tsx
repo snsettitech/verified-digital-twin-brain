@@ -257,9 +257,17 @@ export default function KnowledgePage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-10 pb-20">
-      <div>
-        <h1 className="text-4xl font-black tracking-tight text-slate-900">Knowledge Hub</h1>
-        <p className="text-slate-500 mt-2 font-medium">Quantify and manage the data that powers your Digital Twin.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-4xl font-black tracking-tight text-slate-900">Knowledge Hub</h1>
+          <p className="text-slate-500 mt-2 font-medium">Quantify and manage the data that powers your Digital Twin.</p>
+        </div>
+        <a
+          href="/dashboard/knowledge/staging"
+          className="px-6 py-3 bg-indigo-600 text-white rounded-2xl text-sm font-black hover:bg-indigo-700 transition-all"
+        >
+          View Staging
+        </a>
       </div>
 
       {!loading && <KnowledgeInsights profile={profile} />}

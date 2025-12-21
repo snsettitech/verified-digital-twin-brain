@@ -180,3 +180,48 @@ class GroupOverrideSchema(BaseModel):
     override_value: Dict[str, Any]
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+# Phase 6: Mind Ops Layer Schemas
+
+class SourceHealthCheckSchema(BaseModel):
+    id: str
+    source_id: str
+    check_type: str
+    status: str
+    message: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+class TrainingJobSchema(BaseModel):
+    id: str
+    source_id: str
+    twin_id: str
+    status: str
+    job_type: str
+    priority: int
+    error_message: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+class IngestionLogSchema(BaseModel):
+    id: str
+    source_id: str
+    twin_id: str
+    log_level: str
+    message: str
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
+
+class BulkApproveRequest(BaseModel):
+    source_ids: List[str]
+
+class BulkUpdateRequest(BaseModel):
+    source_ids: List[str]
+    metadata: Dict[str, Any]  # Can include: publish_date, author, citation_url
+
+class SourceRejectRequest(BaseModel):
+    reason: str

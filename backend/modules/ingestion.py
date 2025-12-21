@@ -8,7 +8,10 @@ from typing import List
 from PyPDF2 import PdfReader
 from youtube_transcript_api import YouTubeTranscriptApi
 from modules.clients import get_openai_client, get_pinecone_index
-from modules.observability import supabase
+from modules.observability import supabase, log_ingestion_event
+from modules.health_checks import run_all_health_checks, calculate_content_hash
+from modules.training_jobs import create_training_job
+from typing import List, Optional, Dict, Any
 
 def extract_text_from_pdf(file_path: str) -> str:
     reader = PdfReader(file_path)
@@ -44,6 +47,7 @@ async def ingest_youtube_transcript(source_id: str, twin_id: str, url: str):
         text = " ".join([item.text for item in transcript_snippets])
     except Exception as e:
         print(f"Transcript API failed, falling back to Whisper: {e}")
+        log_ingestion_event(source_id, twin_id, "warning", f"Transcript API failed, using Whisper: {e}")
         # 2. Fallback: Download audio and use Whisper
         try:
             temp_dir = "temp_uploads"
@@ -76,21 +80,42 @@ async def ingest_youtube_transcript(source_id: str, twin_id: str, url: str):
         raise ValueError("No text could be extracted from the video")
         
     try:
-        # Record source in Supabase
+        # Phase 6: Staging workflow - extract and stage, don't index yet
+        content_hash = calculate_content_hash(text)
+        
+        # Record source in Supabase with staging status
         supabase.table("sources").insert({
             "id": source_id,
             "twin_id": twin_id,
             "filename": f"YouTube: {video_id}",
             "file_size": len(text),
-            "status": "processing"
+            "content_text": text,
+            "content_hash": content_hash,
+            "status": "staged",
+            "staging_status": "staged",
+            "extracted_text_length": len(text)
         }).execute()
         
-        num_chunks = await process_and_index_text(source_id, twin_id, text)
+        log_ingestion_event(source_id, twin_id, "info", f"YouTube transcript extracted: {len(text)} characters")
         
-        supabase.table("sources").update({"status": "processed"}).eq("id", source_id).execute()
-        return num_chunks
+        # Run health checks
+        health_result = run_all_health_checks(source_id, twin_id, text, source_data={
+            "filename": f"YouTube: {video_id}",
+            "twin_id": twin_id
+        })
+        
+        # Update source health status
+        supabase.table("sources").update({
+            "health_status": health_result["overall_status"]
+        }).eq("id", source_id).execute()
+        
+        log_ingestion_event(source_id, twin_id, "info", f"Health checks completed: {health_result['overall_status']}")
+        
+        return 0  # No chunks yet (staged, not indexed)
     except Exception as e:
-        print(f"Error indexing YouTube content: {e}")
+        print(f"Error staging YouTube content: {e}")
+        log_ingestion_event(source_id, twin_id, "error", f"Error staging YouTube content: {e}")
+        supabase.table("sources").update({"status": "error", "health_status": "failed"}).eq("id", source_id).execute()
         raise e
 
 async def ingest_podcast_rss(source_id: str, twin_id: str, url: str):
@@ -124,7 +149,7 @@ async def ingest_podcast_rss(source_id: str, twin_id: str, url: str):
             with open(file_path, "wb") as f:
                 f.write(response.content)
 
-        # Transcribe and index
+        # Transcribe and stage (ingest_source now stages instead of indexing)
         num_chunks = await ingest_source(source_id, twin_id, file_path, f"Podcast: {latest_episode.title}")
         return num_chunks
     except Exception as e:
@@ -155,21 +180,42 @@ async def ingest_x_thread(source_id: str, twin_id: str, url: str):
             text = data.get("text", "")
             user = data.get("user", {}).get("name", "Unknown")
             
-            # Record source in Supabase
+            # Phase 6: Staging workflow
+            content_hash = calculate_content_hash(text)
+            
+            # Record source in Supabase with staging status
             supabase.table("sources").insert({
                 "id": source_id,
                 "twin_id": twin_id,
                 "filename": f"X Thread: {tweet_id} by {user}",
                 "file_size": len(text),
-                "status": "processing"
+                "content_text": text,
+                "content_hash": content_hash,
+                "status": "staged",
+                "staging_status": "staged",
+                "extracted_text_length": len(text)
             }).execute()
 
-            num_chunks = await process_and_index_text(source_id, twin_id, text, metadata_override={"source_type": "x_thread"})
+            log_ingestion_event(source_id, twin_id, "info", f"X thread extracted: {len(text)} characters")
             
-            supabase.table("sources").update({"status": "processed"}).eq("id", source_id).execute()
-            return num_chunks
+            # Run health checks
+            health_result = run_all_health_checks(source_id, twin_id, text, source_data={
+                "filename": f"X Thread: {tweet_id} by {user}",
+                "twin_id": twin_id
+            })
+            
+            # Update source health status
+            supabase.table("sources").update({
+                "health_status": health_result["overall_status"]
+            }).eq("id", source_id).execute()
+            
+            log_ingestion_event(source_id, twin_id, "info", f"Health checks completed: {health_result['overall_status']}")
+            
+            return 0  # No chunks yet (staged, not indexed)
     except Exception as e:
-        print(f"Error ingesting X thread: {e}")
+        print(f"Error staging X thread: {e}")
+        log_ingestion_event(source_id, twin_id, "error", f"Error staging X thread: {e}")
+        supabase.table("sources").update({"status": "error", "health_status": "failed"}).eq("id", source_id).execute()
         raise e
 
 async def transcribe_audio(file_path: str) -> str:
@@ -282,6 +328,7 @@ async def ingest_source(source_id: str, twin_id: str, file_path: str, filename: 
         existing = supabase.table("sources").select("id").eq("twin_id", twin_id).eq("filename", filename).execute()
         if existing.data:
             print(f"File {filename} already exists. Updating source(s)...")
+            log_ingestion_event(source_id, twin_id, "info", f"Duplicate filename detected, removing old sources")
             # Delete ALL old versions first to keep knowledge clean
             for record in existing.data:
                 old_source_id = record["id"]
@@ -309,21 +356,49 @@ async def ingest_source(source_id: str, twin_id: str, file_path: str, filename: 
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             text = f.read()
     
-    num_chunks = await process_and_index_text(source_id, twin_id, text)
+    # Phase 6: Staging workflow - store text, run health checks, don't index yet
+    content_hash = calculate_content_hash(text)
     
-    # Update status to processed
+    # Update source with extracted text and staging status
+    update_data = {
+        "content_text": text,
+        "content_hash": content_hash,
+        "status": "staged",
+        "staging_status": "staged",
+        "extracted_text_length": len(text)
+    }
+    
     if filename:
-        supabase.table("sources").update({"status": "processed"}).eq("id", source_id).execute()
-
-    # Trigger background style analysis refresh to incorporate new knowledge/opinions
-    try:
-        from modules.agent import get_owner_style_profile
-        import asyncio
-        asyncio.create_task(get_owner_style_profile(twin_id, force_refresh=True))
-    except Exception as e:
-        print(f"Failed to trigger style refresh: {e}")
-
-    return num_chunks
+        supabase.table("sources").update(update_data).eq("id", source_id).execute()
+    else:
+        # If no filename, we need to insert the source record
+        supabase.table("sources").insert({
+            "id": source_id,
+            "twin_id": twin_id,
+            **update_data
+        }).execute()
+    
+    log_ingestion_event(source_id, twin_id, "info", f"Text extracted: {len(text)} characters")
+    
+    # Run health checks
+    health_result = run_all_health_checks(
+        source_id, 
+        twin_id, 
+        text,
+        source_data={
+            "filename": filename or "unknown",
+            "twin_id": twin_id
+        }
+    )
+    
+    # Update source health status
+    supabase.table("sources").update({
+        "health_status": health_result["overall_status"]
+    }).eq("id", source_id).execute()
+    
+    log_ingestion_event(source_id, twin_id, "info", f"Health checks completed: {health_result['overall_status']}")
+    
+    return 0  # No chunks yet (staged, not indexed)
 
 async def delete_source(source_id: str, twin_id: str):
     """
@@ -347,3 +422,97 @@ async def delete_source(source_id: str, twin_id: str):
     supabase.table("sources").delete().eq("id", source_id).eq("twin_id", twin_id).execute()
     
     return True
+
+# Phase 6: Staging workflow functions
+
+async def approve_source(source_id: str) -> str:
+    """
+    Approves staged source and creates training job.
+    
+    Args:
+        source_id: Source UUID
+    
+    Returns:
+        Training job ID
+    """
+    # Get source to verify it exists and get twin_id
+    source_response = supabase.table("sources").select("twin_id, staging_status").eq("id", source_id).single().execute()
+    if not source_response.data:
+        raise ValueError(f"Source {source_id} not found")
+    
+    twin_id = source_response.data["twin_id"]
+    
+    # Update staging status
+    supabase.table("sources").update({
+        "staging_status": "approved",
+        "status": "approved"
+    }).eq("id", source_id).execute()
+    
+    log_ingestion_event(source_id, twin_id, "info", "Source approved, creating training job")
+    
+    # Create training job
+    job_id = create_training_job(source_id, twin_id, job_type="ingestion", priority=0)
+    
+    return job_id
+
+async def reject_source(source_id: str, reason: str):
+    """
+    Rejects source with reason.
+    
+    Args:
+        source_id: Source UUID
+        reason: Rejection reason
+    """
+    source_response = supabase.table("sources").select("twin_id").eq("id", source_id).single().execute()
+    if not source_response.data:
+        raise ValueError(f"Source {source_id} not found")
+    
+    twin_id = source_response.data["twin_id"]
+    
+    # Update staging status
+    supabase.table("sources").update({
+        "staging_status": "rejected",
+        "status": "rejected"
+    }).eq("id", source_id).execute()
+    
+    log_ingestion_event(source_id, twin_id, "warning", f"Source rejected: {reason}")
+
+async def bulk_approve_sources(source_ids: List[str]) -> Dict[str, str]:
+    """
+    Bulk approve multiple sources.
+    
+    Args:
+        source_ids: List of source UUIDs
+    
+    Returns:
+        Dict mapping source_id to job_id
+    """
+    results = {}
+    for source_id in source_ids:
+        try:
+            job_id = await approve_source(source_id)
+            results[source_id] = job_id
+        except Exception as e:
+            print(f"Error approving source {source_id}: {e}")
+            results[source_id] = None
+    return results
+
+async def bulk_update_source_metadata(source_ids: List[str], metadata_updates: Dict[str, Any]):
+    """
+    Bulk update metadata for sources.
+    
+    Args:
+        source_ids: List of source UUIDs
+        metadata_updates: Dict with fields to update (access_group, publish_date, author, citation_url, visibility)
+    """
+    allowed_fields = ["publish_date", "author", "citation_url"]
+    update_data = {k: v for k, v in metadata_updates.items() if k in allowed_fields}
+    
+    if not update_data:
+        return
+    
+    for source_id in source_ids:
+        try:
+            supabase.table("sources").update(update_data).eq("id", source_id).execute()
+        except Exception as e:
+            print(f"Error updating source {source_id}: {e}")

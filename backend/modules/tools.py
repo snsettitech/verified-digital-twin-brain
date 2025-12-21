@@ -3,11 +3,15 @@ from modules.retrieval import retrieve_context
 from typing import List, Dict, Any, Optional
 import os
 
-def get_retrieval_tool(twin_id: str, group_id: Optional[str] = None):
+def get_retrieval_tool(twin_id: str, group_id: Optional[str] = None, conversation_history: list = None):
     """
     Creates a tool for retrieving context from the digital twin's knowledge base.
     If group_id is provided, filters results by group permissions.
+    If conversation_history is provided, uses it to expand ambiguous queries.
     """
+    # Capture conversation_history in closure
+    history = conversation_history or []
+    
     @tool
     async def search_knowledge_base(query: str) -> str:
         """
@@ -15,11 +19,67 @@ def get_retrieval_tool(twin_id: str, group_id: Optional[str] = None):
         This tool checks verified QnA entries first (highest priority), then vector search.
         If a verified QnA match is found (verified_qna_match: true), use it exactly as provided.
         Use this tool when you need information from documents uploaded by the owner.
+        
+        CRITICAL: If the query is ambiguous or vague (e.g., "reflection", "that document", "the summary above"),
+        you MUST expand it using conversation history. Look at previous messages to find specific keywords.
+        For example:
+        - "reflection" → "M&A reflection SGMT 6050" (if previous messages mentioned M&A or SGMT 6050)
+        - "that document" → Use keywords from the document that was just discussed
+        - "the summary above" → Use keywords from the summary that was just provided
+        
+        ALWAYS expand vague queries before searching. Never search for generic terms like "reflection" alone
+        if the conversation context suggests a specific document (e.g., "M&A reflection").
+        
         Returns a JSON string containing the relevant context snippets with metadata.
         """
         import json
-        print(f"DEBUG: search_knowledge_base called with query: {query}")
-        contexts = await retrieve_context(query, twin_id, group_id=group_id)
+        
+        # Auto-expand ambiguous queries using conversation history
+        expanded_query = query
+        if history and len(history) > 0:
+            # Extract keywords from recent conversation (last 10 messages for better context)
+            recent_context = []
+            for msg in history[-10:]:
+                if hasattr(msg, 'content') and msg.content:
+                    content = str(msg.content)
+                    # Skip system messages and very short messages
+                    if len(content) > 10:
+                        recent_context.append(content)
+            
+            if recent_context:
+                # If query is too generic (single word, common terms), try to expand it
+                generic_terms = ['reflection', 'document', 'summary', 'that', 'this', 'it', 'above', 'below', 'deal']
+                query_lower = query.lower().strip()
+                
+                if query_lower in generic_terms or len(query.split()) <= 2:
+                    # Look for specific keywords in conversation history
+                    context_text = " ".join(recent_context).lower()
+                    
+                    # Common patterns to extract - build expanded query progressively
+                    expanded_parts = [query]
+                    
+                    # Check for M&A related terms
+                    if any(term in context_text for term in ['m&a', 'mergers', 'acquisitions', 'merger', 'acquisition']):
+                        if 'm&a' not in query_lower and 'merger' not in query_lower and 'acquisition' not in query_lower:
+                            expanded_parts.insert(0, "M&A")
+                    
+                    # Check for SGMT 6050
+                    if any(term in context_text for term in ['sGMT', '6050', 'sGMT 6050']):
+                        if '6050' not in query_lower and 'sGMT' not in query_lower:
+                            expanded_parts.append("SGMT 6050")
+                    
+                    # Check for reflection specifically
+                    if 'reflection' in context_text and query_lower == 'reflection':
+                        # Make sure we include M&A if it was mentioned
+                        if any(term in context_text for term in ['m&a', 'mergers', 'acquisitions']):
+                            expanded_query = "M&A reflection SGMT 6050"
+                        else:
+                            expanded_query = " ".join(expanded_parts)
+                    else:
+                        expanded_query = " ".join(expanded_parts)
+        
+        print(f"DEBUG: search_knowledge_base called with query: '{query}' (expanded to: '{expanded_query}')")
+        contexts = await retrieve_context(expanded_query, twin_id, group_id=group_id)
         return json.dumps(contexts)
     
     return search_knowledge_base

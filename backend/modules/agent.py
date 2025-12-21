@@ -141,17 +141,27 @@ def create_twin_agent(twin_id: str, group_id: Optional[str] = None, system_promp
         max_tokens=max_tokens if max_tokens else None
     )
     
-    # Setup tools
-    retrieval_tool = get_retrieval_tool(twin_id, group_id=group_id)
+    # Setup tools - will be recreated with conversation history in call_model
     cloud_tools = get_cloud_tools(allowed_tools=allowed_tools)
-    tools = [retrieval_tool] + cloud_tools
     
-    # Bind tools to the LLM
-    llm_with_tools = llm.bind_tools(tools)
+    # Bind tools to the LLM (will be updated with conversation-aware retrieval tool)
+    llm_with_tools = None  # Will be set in call_model
     
     # Define the nodes
     async def call_model(state: TwinState):
         messages = state["messages"]
+        
+        # Create retrieval tool with conversation history for context-aware query expansion
+        retrieval_tool = get_retrieval_tool(twin_id, group_id=group_id, conversation_history=messages)
+        tools = [retrieval_tool] + cloud_tools
+        llm_with_tools = llm.bind_tools(tools)
+        
+        # Check current query for brevity requests
+        current_query = ""
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                current_query = msg.content.lower()
+                break
         
         # Ensure system message is always present at the beginning
         has_system = any(isinstance(m, SystemMessage) for m in messages)
@@ -190,25 +200,33 @@ def create_twin_agent(twin_id: str, group_id: Optional[str] = None, system_promp
 
             general_knowledge_note = "You may use general knowledge if allowed in settings." if general_knowledge_allowed else "Do NOT make things up or use general knowledge - only respond with verified information."
             
+            # Check if user wants brevity from current query or history
+            brevity_instruction = ""
+            if current_query and ("one line" in current_query or "short answer" in current_query or "brief" in current_query or "concise" in current_query):
+                brevity_instruction = "\n            **BREVITY MODE**: The user requested a short/one-line answer. Provide a concise 1-2 sentence response maximum. No bullet points, no lists, just a brief summary."
+            
             system_prompt = effective_system_prompt or f"""You are the AI Digital Twin of the owner (ID: {twin_id}). 
             Your primary intelligence comes from the `search_knowledge_base` tool.
 
             {persona_section}
+            {brevity_instruction}
 
             CRITICAL OPERATING PROCEDURES:
-            1. Factual Questions: For ANY question about facts, opinions, history, or documents, you MUST FIRST call `search_knowledge_base`.
-            2. Verified QnA Priority: If search returns ANY result with "verified_qna_match": true or "is_verified": true, this is a verified answer from the owner. YOUR RESPONSE MUST BE THE EXACT TEXT FROM THE "text" FIELD - COPY IT VERBATIM. Do not paraphrase, modify, add to, or rephrase it in any way. Just return the exact "text" value as your complete response.
-            3. Verified Info: If search returns "is_verified": true, copy the exact "text" field value as your response. No modifications allowed.
-            4. Persona & Voice:
+            0. **Brevity First**: Default to concise, one-line answers when possible. Only expand when explicitly asked for details. If the user asks for "one line", "short answer", "brief", or "concise", provide exactly that - a single sentence or maximum 2 sentences.
+            1. **Context Awareness**: If the user's query is ambiguous (e.g., "the reflection", "that document", "the summary above"), use conversation history to understand what they're referring to. Look at previous messages to identify the specific topic (e.g., "M&A reflection", "SGMT 6050", etc.) and include those keywords in your search query.
+            2. Factual Questions: For ANY question about facts, opinions, history, or documents, you MUST FIRST call `search_knowledge_base`. When queries are ambiguous, expand them using context from the conversation (e.g., "reflection" → "M&A reflection SGMT 6050" if that was discussed).
+            3. Verified QnA Priority: If search returns ANY result with "verified_qna_match": true or "is_verified": true, this is a verified answer from the owner. YOUR RESPONSE MUST BE THE EXACT TEXT FROM THE "text" FIELD - COPY IT VERBATIM. Do not paraphrase, modify, add to, or rephrase it in any way. Just return the exact "text" value as your complete response.
+            4. Verified Info: If search returns "is_verified": true, copy the exact "text" field value as your response. No modifications allowed.
+            5. Persona & Voice:
                - Sources have a 'category' (FACT or OPINION), a 'tone', and potentially an 'opinion_topic' and 'opinion_stance'.
                - If a source is an 'OPINION', use first-person framing like 'In my view' or 'I personally believe'.
                - If an 'opinion_stance' is provided for an 'OPINION', strictly adhere to that stance.
                - If a source is a 'FACT', state it directly as objective information.
                - Adopt the 'tone' (e.g., Thoughtful, Assertive) found in the relevant source to match the owner's style.
-            5. No Data: If the tool returns no relevant information OR returns empty results with weak retrieval scores (< 0.5), you MUST respond with: "I don't have this specific information in my knowledge base." {general_knowledge_note}
-            6. Citations: Always cite your sources using [Source ID] when using tool results. For verified QnA, use the citations provided.
-            7. Personal Identity: Speak in the first person ("I", "my") as if you are the owner, but grounded in the verified data.
-            8. ALWAYS SEARCH: Always call search_knowledge_base first, even for simple greetings. If a verified answer exists, use it exactly.
+            6. No Data: If the tool returns no relevant information OR returns empty results with weak retrieval scores (< 0.5), you MUST respond with: "I don't have this specific information in my knowledge base." {general_knowledge_note}
+            7. Citations: Always cite your sources using [Source ID] when using tool results. For verified QnA, use the citations provided.
+            8. Personal Identity: Speak in the first person ("I", "my") as if you are the owner, but grounded in the verified data.
+            9. ALWAYS SEARCH: Always call search_knowledge_base first, even for simple greetings. If a verified answer exists, use it exactly. When queries are vague, use conversation context to make them more specific before searching.
 
             Current Twin ID: {twin_id}"""
             messages = [SystemMessage(content=system_prompt)] + messages
@@ -220,6 +238,11 @@ def create_twin_agent(twin_id: str, group_id: Optional[str] = None, system_promp
         citations = list(state.get("citations", []))
         total_score = 0
         score_count = 0
+
+        # Create tools with conversation history (same as in call_model)
+        messages = state["messages"]
+        retrieval_tool = get_retrieval_tool(twin_id, group_id=group_id, conversation_history=messages)
+        tools = [retrieval_tool] + cloud_tools
 
         # Create tool node manually to extract metadata
         tool_node = ToolNode(tools)

@@ -48,8 +48,17 @@ def get_conversations(twin_id: str):
     return response.data
 
 def get_messages(conversation_id: str):
-    response = supabase.table("messages").select("*").eq("conversation_id", conversation_id).order("created_at", desc=False).execute()
-    return response.data
+    """Get messages for a conversation with error handling."""
+    if not conversation_id:
+        return []
+    
+    try:
+        response = supabase.table("messages").select("*").eq("conversation_id", conversation_id).order("created_at", desc=False).execute()
+        return response.data if response.data else []
+    except Exception as e:
+        print(f"Error fetching messages for conversation {conversation_id}: {e}")
+        # Return empty list on error to prevent chat from failing completely
+        return []
 
 def get_sources(twin_id: str):
     response = supabase.table("sources").select("*").eq("twin_id", twin_id).order("created_at", desc=True).execute()
@@ -109,3 +118,93 @@ async def get_knowledge_profile(twin_id: str):
         "tone_distribution": tone_distribution,
         "top_tone": top_tone
     }
+
+# Phase 6: Ingestion Logging Functions
+
+def log_ingestion_event(source_id: str, twin_id: str, level: str, message: str, metadata: dict = None):
+    """
+    Logs ingestion event to ingestion_logs table.
+    
+    Args:
+        source_id: Source UUID
+        twin_id: Twin UUID
+        level: Log level ('info', 'warning', 'error')
+        message: Log message
+        metadata: Optional context/metadata
+    """
+    try:
+        supabase.table("ingestion_logs").insert({
+            "source_id": source_id,
+            "twin_id": twin_id,
+            "log_level": level,
+            "message": message,
+            "metadata": metadata or {}
+        }).execute()
+    except Exception as e:
+        print(f"Error logging ingestion event: {e}")
+
+def get_ingestion_logs(source_id: str, limit: int = 100):
+    """
+    Retrieves logs for a source.
+    
+    Args:
+        source_id: Source UUID
+        limit: Maximum number of logs to return
+    
+    Returns:
+        List of log entries
+    """
+    try:
+        response = supabase.table("ingestion_logs").select("*").eq(
+            "source_id", source_id
+        ).order("created_at", desc=True).limit(limit).execute()
+        return response.data if response.data else []
+    except Exception as e:
+        print(f"Error fetching ingestion logs: {e}")
+        return []
+
+def get_dead_letter_queue(twin_id: str):
+    """
+    Lists sources in error state that need attention.
+    
+    Args:
+        twin_id: Twin UUID
+    
+    Returns:
+        List of sources needing attention
+    """
+    try:
+        response = supabase.table("sources").select("*").eq(
+            "twin_id", twin_id
+        ).in_("status", ["error", "needs_attention"]).order("created_at", desc=True).execute()
+        return response.data if response.data else []
+    except Exception as e:
+        print(f"Error fetching dead letter queue: {e}")
+        return []
+
+def retry_failed_ingestion(source_id: str, twin_id: str):
+    """
+    Resets status and recreates training job for failed ingestion.
+    
+    Args:
+        source_id: Source UUID
+        twin_id: Twin UUID
+    
+    Returns:
+        New training job ID
+    """
+    from modules.training_jobs import create_training_job
+    
+    # Reset source status
+    supabase.table("sources").update({
+        "status": "staged",
+        "staging_status": "staged",
+        "health_status": "healthy"
+    }).eq("id", source_id).execute()
+    
+    # Create new training job
+    job_id = create_training_job(source_id, twin_id, job_type="ingestion", priority=0)
+    
+    log_ingestion_event(source_id, twin_id, "info", f"Retry initiated, training job {job_id} created")
+    
+    return job_id
