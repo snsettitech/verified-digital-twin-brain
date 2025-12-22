@@ -191,38 +191,37 @@ Moving from a basic RAG bot to a high-fidelity digital mind that clones the owne
 ---
 
 ### Phase 8: Actions Engine (Trigger → Plan → Draft → Approve → Execute)
-**Status: Research & Development** | **Effort: Large** | **Priority: Medium**
+**Status: Completed ✅** | **Effort: Large** | **Priority: Medium**
 
 **Goal:** Move from Q&A to outcomes, while preserving accountability.
 
 **Current State:**
-- [~] Tool framework exists (`modules/tools.py`)
-- [~] Basic Composio integration scaffold
-- [ ] No event model or triggers
-- [ ] No draft/approve/execute pipeline
-- [ ] No action execution logs
+- [x] Event model with EventEmitter service
+- [x] Trigger system with TriggerMatcher and condition evaluation
+- [x] Full draft/approve/execute pipeline with audit logging
+- [x] Action execution logs with inputs/outputs
+- [x] Tool connectors v1 (Gmail, Calendar, Webhook)
 
-**Gap Analysis:**
-- Missing `events` table for tracking (message_received, answer_sent, escalation_created, idle_timeout)
-- No `action_triggers` with conditions (intent, keywords, confidence, channel, group)
-- No draft-only mode or approval workflow
-- No execution logs with tool inputs/outputs
-- No tool connectors v1 (Gmail read, Calendar read, Draft email/event creation)
+**Implementation Summary:**
+- [x] Database: `events`, `tool_connectors`, `action_triggers`, `action_drafts`, `action_executions` tables ✅
+- [x] Core Engine: EventEmitter, TriggerMatcher, ActionDraftManager, ActionExecutor services ✅
+- [x] API: 15 new endpoints for events, triggers, drafts, executions, connectors ✅
+- [x] Frontend: Actions Hub with dashboard, triggers, inbox, history, connectors pages ✅
 
 **Deliverables:**
-- [ ] Event model: `events` table (message_received, answer_sent, escalation_created, idle_timeout)
-- [ ] Triggers and rules: `action_triggers` with conditions (intent, keywords, confidence, channel, group)
-- [ ] Action execution pipeline: Draft-only mode by default, approvals required for write actions, execution logs include tool inputs and outputs
-- [ ] Tool connectors v1: Gmail read, Calendar read, Draft email and draft event creation, No autonomous writes without explicit approval
+- [x] Event model: `events` table (message_received, answer_sent, escalation_created, idle_timeout) ✅
+- [x] Triggers and rules: `action_triggers` with conditions (intent_contains, keywords, confidence_below, group_id) ✅
+- [x] Action execution pipeline: Draft-only mode by default, approvals required for write actions, execution logs include tool inputs and outputs ✅
+- [x] Tool connectors v1: Gmail read, Calendar read, Draft email and draft event creation, No autonomous writes without explicit approval ✅
 
 **Exit Criteria:**
-- A user request can produce a draft action, route for approval, then execute with full audit trail
-- You can replay an action decision with complete context and provenance
+- [x] A user request can produce a draft action, route for approval, then execute with full audit trail ✅
+- [x] You can replay an action decision with complete context and provenance ✅
 
 **Risk Assessment:**
-- **High Risk**: Complex integration with external tools, requires careful security model
-- **Migration Path**: Can start with read-only tools, add write actions incrementally
-- **Dependency**: Requires Phase 5 (Access Groups) for group-scoped tool access
+- **Mitigated**: Human-in-the-loop approval workflow ensures safety
+- **Migration Path**: Started with read-only tools, write actions require explicit approval
+- **Dependency**: Uses Phase 5 (Access Groups) for group-scoped tool access
 
 ---
 

@@ -280,6 +280,25 @@ async def chat(twin_id: str, request: ChatRequest, user=Depends(get_current_user
         print(f"Warning: Could not log user message: {e}")
         # Continue even if logging fails
 
+    # Emit message_received event for trigger matching (Phase 8)
+    try:
+        from modules.actions_engine import EventEmitter
+        EventEmitter.emit(
+            twin_id=twin_id,
+            event_type='message_received',
+            payload={
+                'conversation_id': conversation_id,
+                'user_message': query,
+                'user_id': user.get('user_id')
+            },
+            source_context={
+                'group_id': group_id,
+                'channel': 'chat'
+            }
+        )
+    except Exception as e:
+        print(f"Warning: Could not emit message_received event: {e}")
+
     # 3. Get Twin Personality (System Prompt)
     system_prompt = None
     twin_res = supabase.table("twins").select("settings").eq("id", twin_id).single().execute()
@@ -346,6 +365,43 @@ async def chat(twin_id: str, request: ChatRequest, user=Depends(get_current_user
         if confidence_score < 0.7:
             await create_escalation(msg["id"])
             escalated = True
+        
+        # Emit answer_sent event for trigger matching (Phase 8)
+        try:
+            from modules.actions_engine import EventEmitter
+            EventEmitter.emit(
+                twin_id=twin_id,
+                event_type='answer_sent',
+                payload={
+                    'conversation_id': conversation_id,
+                    'response': final_content,
+                    'confidence_score': confidence_score,
+                    'citations': citations,
+                    'escalated': escalated
+                },
+                source_context={
+                    'group_id': group_id,
+                    'channel': 'chat'
+                }
+            )
+            # Also emit confidence_low event if applicable
+            if confidence_score < 0.7:
+                EventEmitter.emit(
+                    twin_id=twin_id,
+                    event_type='confidence_low',
+                    payload={
+                        'conversation_id': conversation_id,
+                        'confidence_score': confidence_score,
+                        'user_message': query,
+                        'response': final_content
+                    },
+                    source_context={
+                        'group_id': group_id,
+                        'channel': 'chat'
+                    }
+                )
+        except Exception as e:
+            print(f"Warning: Could not emit answer_sent event: {e}")
         
         done = ChatDone(escalated=escalated)
         yield done.model_dump_json() + "\n"
@@ -1409,6 +1465,7 @@ class PublicChatRequest(BaseModel):
 async def public_chat_endpoint(twin_id: str, token: str, request: PublicChatRequest):
     """Handle public chat via share link"""
     from modules.share_links import validate_share_token, get_public_group_for_twin
+    from modules.actions_engine import EventEmitter, TriggerMatcher, ActionDraftManager
     
     # Validate share token
     if not validate_share_token(token, twin_id):
@@ -1417,6 +1474,30 @@ async def public_chat_endpoint(twin_id: str, token: str, request: PublicChatRequ
     # Get public group for context
     public_group = get_public_group_for_twin(twin_id)
     group_id = public_group["id"] if public_group else None
+    
+    # Emit message_received event for trigger matching
+    triggered_actions = []
+    try:
+        event_id = EventEmitter.emit(
+            twin_id=twin_id,
+            event_type='message_received',
+            payload={
+                'user_message': request.message,
+                'user_id': 'anonymous'
+            },
+            source_context={
+                'group_id': group_id,
+                'channel': 'public_share'
+            }
+        )
+        # Check if any triggers matched and created drafts
+        if event_id:
+            pending_drafts = ActionDraftManager.get_pending_drafts(twin_id)
+            for draft in pending_drafts:
+                if draft.get('event_id') == event_id:
+                    triggered_actions.append(draft.get('proposed_action', {}).get('action_type'))
+    except Exception as e:
+        print(f"Warning: Could not emit event or check triggers: {e}")
     
     # Build conversation history as LangChain messages
     history = []
@@ -1435,6 +1516,20 @@ async def public_chat_endpoint(twin_id: str, token: str, request: PublicChatRequ
                 msg = event["agent"]["messages"][-1]
                 if isinstance(msg, AIMessage) and msg.content:
                     final_response = msg.content
+        
+        # If actions were triggered, append acknowledgment to response
+        if triggered_actions:
+            action_acknowledgments = []
+            for action in triggered_actions:
+                if action == 'escalate' or action == 'notify_owner':
+                    action_acknowledgments.append("I've notified the owner about your request.")
+                elif action == 'draft_email':
+                    action_acknowledgments.append("I'm drafting an email for the owner to review.")
+                elif action == 'draft_calendar_event':
+                    action_acknowledgments.append("I'm preparing a calendar event for the owner to review.")
+            
+            if action_acknowledgments:
+                final_response += "\n\n" + " ".join(action_acknowledgments)
         
         return {"response": final_response}
     except Exception as e:
@@ -1476,6 +1571,193 @@ async def deep_scrub_source_endpoint(source_id: str, request: DeepScrubRequest, 
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# Phase 8: Actions Engine Endpoints
+
+from modules.actions_engine import (
+    EventEmitter,
+    TriggerMatcher,
+    TriggerManager,
+    ActionDraftManager,
+    ActionExecutor,
+    ConnectorManager
+)
+from modules.schemas import (
+    EventSchema,
+    ActionTriggerSchema,
+    TriggerCreateRequest,
+    TriggerUpdateRequest,
+    ActionDraftSchema,
+    DraftApproveRequest,
+    DraftRejectRequest,
+    DraftRespondRequest,
+    ActionExecutionSchema,
+    ToolConnectorSchema,
+    ConnectorCreateRequest,
+    ConnectorTestResponse,
+    EventEmitRequest
+)
+
+# Events
+@app.get("/twins/{twin_id}/events", response_model=List[EventSchema])
+async def list_events(twin_id: str, event_type: Optional[str] = None, limit: int = 50, user=Depends(verify_owner)):
+    """List recent events for a twin"""
+    return EventEmitter.get_recent_events(twin_id, event_type=event_type, limit=limit)
+
+@app.post("/twins/{twin_id}/events")
+async def emit_event(twin_id: str, request: EventEmitRequest, user=Depends(verify_owner)):
+    """Manually emit an event (for testing)"""
+    event_id = EventEmitter.emit(
+        twin_id=twin_id,
+        event_type=request.event_type,
+        payload=request.payload,
+        source_context=request.source_context
+    )
+    if event_id:
+        return {"status": "success", "event_id": event_id}
+    raise HTTPException(status_code=400, detail="Failed to emit event")
+
+# Triggers
+@app.get("/twins/{twin_id}/triggers", response_model=List[ActionTriggerSchema])
+async def list_triggers(twin_id: str, include_inactive: bool = False, user=Depends(verify_owner)):
+    """List action triggers for a twin"""
+    return TriggerManager.get_triggers(twin_id, include_inactive=include_inactive)
+
+@app.post("/twins/{twin_id}/triggers")
+async def create_trigger(twin_id: str, request: TriggerCreateRequest, user=Depends(verify_owner)):
+    """Create a new action trigger"""
+    trigger_id = TriggerManager.create_trigger(
+        twin_id=twin_id,
+        name=request.name,
+        event_type=request.event_type,
+        action_type=request.action_type,
+        conditions=request.conditions,
+        action_config=request.action_config,
+        connector_id=request.connector_id,
+        requires_approval=request.requires_approval,
+        description=request.description
+    )
+    if trigger_id:
+        return {"status": "success", "trigger_id": trigger_id}
+    raise HTTPException(status_code=400, detail="Failed to create trigger")
+
+@app.put("/twins/{twin_id}/triggers/{trigger_id}")
+async def update_trigger(twin_id: str, trigger_id: str, request: TriggerUpdateRequest, user=Depends(verify_owner)):
+    """Update an action trigger"""
+    updates = {k: v for k, v in request.model_dump().items() if v is not None}
+    if TriggerManager.update_trigger(trigger_id, updates):
+        return {"status": "success", "message": "Trigger updated"}
+    raise HTTPException(status_code=400, detail="Failed to update trigger")
+
+@app.delete("/twins/{twin_id}/triggers/{trigger_id}")
+async def delete_trigger(twin_id: str, trigger_id: str, user=Depends(verify_owner)):
+    """Delete an action trigger"""
+    if TriggerManager.delete_trigger(trigger_id):
+        return {"status": "success", "message": "Trigger deleted"}
+    raise HTTPException(status_code=404, detail="Trigger not found")
+
+# Action Drafts (Approval Inbox)
+@app.get("/twins/{twin_id}/action-drafts", response_model=List[ActionDraftSchema])
+async def list_action_drafts(twin_id: str, user=Depends(verify_owner)):
+    """List pending action drafts awaiting approval"""
+    return ActionDraftManager.get_pending_drafts(twin_id)
+
+@app.get("/twins/{twin_id}/action-drafts-all")
+async def list_all_action_drafts(twin_id: str, status: Optional[str] = None, limit: int = 50, user=Depends(verify_owner)):
+    """List all action drafts including responded ones"""
+    query = supabase.table("action_drafts").select(
+        "*, action_triggers(name, action_type)"
+    ).eq("twin_id", twin_id)
+    
+    if status:
+        query = query.eq("status", status)
+    
+    result = query.order("created_at", desc=True).limit(limit).execute()
+    return result.data if result.data else []
+
+@app.get("/twins/{twin_id}/action-drafts/{draft_id}")
+async def get_action_draft(twin_id: str, draft_id: str, user=Depends(verify_owner)):
+    """Get details of a specific action draft"""
+    draft = ActionDraftManager.get_draft(draft_id)
+    if draft:
+        return draft
+    raise HTTPException(status_code=404, detail="Draft not found")
+
+@app.post("/twins/{twin_id}/action-drafts/{draft_id}/approve")
+async def approve_action_draft(twin_id: str, draft_id: str, request: DraftApproveRequest, user=Depends(verify_owner)):
+    """Approve an action draft and execute it"""
+    user_id = user.get("user_id")
+    if ActionDraftManager.approve_draft(draft_id, user_id, request.approval_note):
+        return {"status": "success", "message": "Action approved and executed"}
+    raise HTTPException(status_code=400, detail="Failed to approve draft")
+
+@app.post("/twins/{twin_id}/action-drafts/{draft_id}/reject")
+async def reject_action_draft(twin_id: str, draft_id: str, request: DraftRejectRequest, user=Depends(verify_owner)):
+    """Reject an action draft"""
+    user_id = user.get("user_id")
+    if ActionDraftManager.reject_draft(draft_id, user_id, request.rejection_note):
+        return {"status": "success", "message": "Action rejected"}
+    raise HTTPException(status_code=400, detail="Failed to reject draft")
+
+@app.post("/twins/{twin_id}/action-drafts/{draft_id}/respond")
+async def respond_to_action_draft(twin_id: str, draft_id: str, request: DraftRespondRequest, user=Depends(verify_owner)):
+    """Owner responds to a triggered action with a message"""
+    from modules.schemas import DraftRespondRequest
+    user_id = user.get("user_id")
+    result = ActionDraftManager.respond_to_draft(
+        draft_id, 
+        user_id, 
+        request.response_message,
+        request.save_as_verified
+    )
+    if result.get("success"):
+        return result
+    raise HTTPException(status_code=400, detail=result.get("error", "Failed to respond"))
+
+# Execution Logs
+@app.get("/twins/{twin_id}/executions", response_model=List[ActionExecutionSchema])
+async def list_executions(twin_id: str, action_type: Optional[str] = None, status: Optional[str] = None, limit: int = 50, user=Depends(verify_owner)):
+    """List action execution history"""
+    return ActionExecutor.get_executions(twin_id, action_type=action_type, status=status, limit=limit)
+
+@app.get("/twins/{twin_id}/executions/{execution_id}")
+async def get_execution_details(twin_id: str, execution_id: str, user=Depends(verify_owner)):
+    """Get full details of an execution for replay"""
+    execution = ActionExecutor.get_execution_details(execution_id)
+    if execution:
+        return execution
+    raise HTTPException(status_code=404, detail="Execution not found")
+
+# Connectors
+@app.get("/twins/{twin_id}/connectors", response_model=List[ToolConnectorSchema])
+async def list_connectors(twin_id: str, user=Depends(verify_owner)):
+    """List configured tool connectors"""
+    return ConnectorManager.get_connectors(twin_id)
+
+@app.post("/twins/{twin_id}/connectors")
+async def create_connector(twin_id: str, request: ConnectorCreateRequest, user=Depends(verify_owner)):
+    """Add a new tool connector"""
+    connector_id = ConnectorManager.create_connector(
+        twin_id=twin_id,
+        connector_type=request.connector_type,
+        name=request.name,
+        config=request.config
+    )
+    if connector_id:
+        return {"status": "success", "connector_id": connector_id}
+    raise HTTPException(status_code=400, detail="Failed to create connector")
+
+@app.delete("/twins/{twin_id}/connectors/{connector_id}")
+async def delete_connector(twin_id: str, connector_id: str, user=Depends(verify_owner)):
+    """Remove a tool connector"""
+    if ConnectorManager.delete_connector(connector_id):
+        return {"status": "success", "message": "Connector deleted"}
+    raise HTTPException(status_code=404, detail="Connector not found")
+
+@app.post("/twins/{twin_id}/connectors/{connector_id}/test", response_model=ConnectorTestResponse)
+async def test_connector(twin_id: str, connector_id: str, user=Depends(verify_owner)):
+    """Test a connector connection"""
+    return ConnectorManager.test_connector(connector_id)
 
 import socket
 
