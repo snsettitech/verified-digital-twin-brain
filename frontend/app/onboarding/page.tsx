@@ -15,9 +15,9 @@ import {
 const WIZARD_STEPS = [
     { id: 'welcome', title: 'Welcome', description: 'Get started', icon: '👋' },
     { id: 'create', title: 'Create', description: 'Name your twin', icon: '✏️' },
-    { id: 'content', title: 'Content', description: 'Add knowledge', icon: '📚' },
-    { id: 'training', title: 'Training', description: 'Build your twin', icon: '🧠' },
-    { id: 'chat', title: 'Chat', description: 'Test it out', icon: '💬' },
+    { id: 'content', title: 'Content', description: 'Add files', icon: '📚' },
+    { id: 'interview', title: 'Interview', description: 'Train your twin', icon: '🧠' },
+    { id: 'complete', title: 'Complete', description: 'Get started', icon: '�' },
 ];
 
 export default function OnboardingPage() {
@@ -32,6 +32,7 @@ export default function OnboardingPage() {
     const [isTraining, setIsTraining] = useState(false);
     const [trainingProgress, setTrainingProgress] = useState(0);
     const [twinId, setTwinId] = useState<string | null>(null);
+    const [interviewData, setInterviewData] = useState<Record<string, string>>({});
 
     // Check if should skip onboarding (returning user with existing twins)
     useEffect(() => {
@@ -133,6 +134,40 @@ export default function OnboardingPage() {
         }
     };
 
+    const handleInterviewComplete = async (data: Record<string, string>) => {
+        setInterviewData(data);
+
+        // Save interview data to backend as verified memory
+        if (twinId) {
+            try {
+                const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+
+                // Store each piece of collected data as verified knowledge
+                for (const [key, value] of Object.entries(data)) {
+                    if (value) {
+                        await fetch(`${backendUrl}/graph/nodes`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                twin_id: twinId,
+                                node_type: key.includes('background') ? 'profile.background' :
+                                    key.includes('expertise') ? 'profile.expertise_areas' :
+                                        key.includes('common') ? 'knowledge.common_questions' :
+                                            key.includes('insight') ? 'knowledge.key_insights' :
+                                                key.includes('perspective') ? 'profile.unique_perspective' :
+                                                    key.includes('communication') ? 'style.communication' : key,
+                                value: value,
+                                source: 'onboarding_interview'
+                            }),
+                        });
+                    }
+                }
+            } catch (error) {
+                console.error('Error saving interview data:', error);
+            }
+        }
+    };
+
     const handleComplete = () => {
         // Save onboarding completed flag
         localStorage.setItem('onboardingCompleted', 'true');
@@ -169,17 +204,19 @@ export default function OnboardingPage() {
                 );
             case 3:
                 return (
-                    <TrainingStep
+                    <FirstChatStep
                         twinName={twinName || 'Your Twin'}
-                        contentCount={uploadedFiles.length + pendingUrls.length}
-                        isTraining={isTraining}
-                        trainingProgress={trainingProgress}
+                        twinId={twinId || undefined}
+                        onDataCollected={handleInterviewComplete}
                     />
                 );
             case 4:
                 return (
-                    <FirstChatStep
+                    <TrainingStep
                         twinName={twinName || 'Your Twin'}
+                        contentCount={uploadedFiles.length + pendingUrls.length + Object.keys(interviewData).length}
+                        isTraining={true}
+                        trainingProgress={100}
                     />
                 );
             default:
