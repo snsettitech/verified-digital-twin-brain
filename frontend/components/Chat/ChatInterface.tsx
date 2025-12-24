@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { getSupabaseClient } from '@/lib/supabase/client';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const AUTH_TOKEN = process.env.NEXT_PUBLIC_DEV_TOKEN || 'development_token';
+const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -32,6 +32,13 @@ export default function ChatInterface({
   const [isSearching, setIsSearching] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const supabase = getSupabaseClient();
+
+  const getAuthToken = useCallback(async (): Promise<string | null> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token || null;
+  }, [supabase]);
+
   useEffect(() => {
     const loadHistory = async () => {
       if (!conversationId) {
@@ -43,8 +50,11 @@ export default function ChatInterface({
       }
 
       try {
+        const token = await getAuthToken();
+        if (!token) return;
+
         const response = await fetch(`${API_BASE_URL}/conversations/${conversationId}/messages`, {
-          headers: { 'Authorization': `Bearer ${AUTH_TOKEN}` }
+          headers: { 'Authorization': `Bearer ${token}` }
         });
         if (response.ok) {
           const data = await response.json();
@@ -64,7 +74,7 @@ export default function ChatInterface({
       }
     };
     loadHistory();
-  }, [conversationId]);
+  }, [conversationId, getAuthToken]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -90,10 +100,13 @@ export default function ChatInterface({
     setMessages((prev) => [...prev, assistantMsg]);
 
     try {
+      const token = await getAuthToken();
+      if (!token) throw new Error('Not authenticated');
+
       const response = await fetch(`${API_BASE_URL}/chat/${twinId}`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${AUTH_TOKEN}`,
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -202,8 +215,8 @@ export default function ChatInterface({
 
               <div className="space-y-3">
                 <div className={`p-5 rounded-3xl text-sm leading-relaxed transition-all duration-300 ${msg.role === 'user'
-                    ? 'bg-gradient-to-br from-indigo-600 via-indigo-600 to-purple-600 text-white shadow-xl shadow-indigo-200/50 rounded-tr-none'
-                    : 'bg-white text-slate-800 border border-slate-100 shadow-lg shadow-slate-100/50 rounded-tl-none hover:shadow-xl'
+                  ? 'bg-gradient-to-br from-indigo-600 via-indigo-600 to-purple-600 text-white shadow-xl shadow-indigo-200/50 rounded-tr-none'
+                  : 'bg-white text-slate-800 border border-slate-100 shadow-lg shadow-slate-100/50 rounded-tl-none hover:shadow-xl'
                   }`}>
                   <p className="whitespace-pre-wrap font-medium">{msg.content}</p>
                 </div>

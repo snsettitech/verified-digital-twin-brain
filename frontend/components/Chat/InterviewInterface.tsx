@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
+import { getSupabaseClient } from '@/lib/supabase/client';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const AUTH_TOKEN = process.env.NEXT_PUBLIC_DEV_TOKEN || 'development_token';
+const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
 interface Message {
     role: 'user' | 'assistant';
@@ -30,6 +30,8 @@ export default function InterviewInterface({
     const [conversationId, setConversationId] = useState<string | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
+    const supabase = getSupabaseClient();
+
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     };
@@ -37,6 +39,11 @@ export default function InterviewInterface({
     useEffect(() => {
         scrollToBottom();
     }, [messages, loading]);
+
+    const getAuthToken = async (): Promise<string | null> => {
+        const { data: { session } } = await supabase.auth.getSession();
+        return session?.access_token || null;
+    };
 
     const sendMessage = async () => {
         if (!input.trim() || loading) return;
@@ -47,10 +54,15 @@ export default function InterviewInterface({
         setLoading(true);
 
         try {
+            const token = await getAuthToken();
+            if (!token) {
+                throw new Error('Not authenticated');
+            }
+
             const response = await fetch(`${API_BASE_URL}/cognitive/interview/${twinId}`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${AUTH_TOKEN}`,
+                    'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -108,8 +120,8 @@ export default function InterviewInterface({
 
                             <div className="space-y-2">
                                 <div className={`p-4 rounded-2xl text-sm leading-relaxed ${msg.role === 'user'
-                                        ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 rounded-tr-none'
-                                        : 'bg-white text-slate-800 border border-slate-100 shadow-sm rounded-tl-none'
+                                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 rounded-tr-none'
+                                    : 'bg-white text-slate-800 border border-slate-100 shadow-sm rounded-tl-none'
                                     }`}>
                                     <p className="whitespace-pre-wrap">{msg.content}</p>
                                 </div>

@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { getSupabaseClient } from '@/lib/supabase/client';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const AUTH_TOKEN = process.env.NEXT_PUBLIC_DEV_TOKEN || 'development_token';
+const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
 interface Node {
     id: string;
@@ -39,15 +39,30 @@ export default function BrainGraph({
     const [data, setData] = useState<GraphData | null>(null);
     const [loading, setLoading] = useState(true);
 
+    const supabase = getSupabaseClient();
+
+    const getAuthToken = useCallback(async (): Promise<string | null> => {
+        const { data: { session } } = await supabase.auth.getSession();
+        return session?.access_token || null;
+    }, [supabase]);
+
     useEffect(() => {
         const fetchGraph = async () => {
-            try {
-                // Determine Twin ID (Prop or Default for Dev)
-                const tid = twinId || 'eeeed554-9180-4229-a9af-0f8dd2c69e9b';
+            if (!twinId) {
+                setLoading(false);
+                return;
+            }
 
-                // Use the correct graph endpoint: /twins/{id}/graph
-                const res = await fetch(`${API_BASE_URL}/twins/${tid}/graph?limit=100`, {
-                    headers: { 'Authorization': `Bearer ${AUTH_TOKEN}` }
+            try {
+                const token = await getAuthToken();
+                if (!token) {
+                    console.error('Not authenticated');
+                    setLoading(false);
+                    return;
+                }
+
+                const res = await fetch(`${API_BASE_URL}/twins/${twinId}/graph?limit=100`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
                 });
 
                 if (res.ok) {
@@ -62,7 +77,7 @@ export default function BrainGraph({
         };
 
         fetchGraph();
-    }, [twinId, refreshTrigger]);
+    }, [twinId, refreshTrigger, getAuthToken]);
 
     // Simple Visualization Logic (Circular Layout)
     if (loading && !data) return (
