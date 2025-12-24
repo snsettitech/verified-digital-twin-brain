@@ -10,6 +10,7 @@ interface Message {
   content: string;
   citations?: string[];
   confidence_score?: number;
+  graph_used?: boolean;
 }
 
 export default function ChatInterface({
@@ -138,11 +139,14 @@ export default function ChatInterface({
                 if (data.conversation_id && !conversationId && onConversationStarted) {
                   onConversationStarted(data.conversation_id);
                 }
+                // Extract graph_used from metadata
+                const graphUsed = data.graph_context?.graph_used || false;
                 setMessages((prev) => {
                   const last = [...prev];
                   const lastMsg = { ...last[last.length - 1] };
                   lastMsg.confidence_score = data.confidence_score;
                   lastMsg.citations = data.citations;
+                  lastMsg.graph_used = graphUsed;
                   last[last.length - 1] = lastMsg;
                   return last;
                 });
@@ -221,8 +225,14 @@ export default function ChatInterface({
                   <p className="whitespace-pre-wrap font-medium">{msg.content}</p>
                 </div>
 
-                {msg.role === 'assistant' && (msg.citations || msg.confidence_score !== undefined) && (
+                {msg.role === 'assistant' && (msg.citations || msg.confidence_score !== undefined || msg.graph_used) && (
                   <div className="flex flex-wrap gap-2 px-1">
+                    {msg.graph_used && (
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-black border uppercase tracking-wider bg-indigo-50 text-indigo-700 border-indigo-100">
+                        <span>💡</span>
+                        From your interview
+                      </div>
+                    )}
                     {msg.confidence_score !== undefined && (
                       <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-black border uppercase tracking-wider ${msg.confidence_score > 0.8 ? 'bg-green-50 text-green-700 border-green-100' : 'bg-yellow-50 text-yellow-700 border-yellow-100'
                         }`}>
