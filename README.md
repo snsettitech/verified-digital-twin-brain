@@ -15,6 +15,33 @@ This platform enables creators to build AI-powered digital twins that can repres
 
 ---
 
+## Quick Start
+
+### Preflight Check (run before every push)
+```powershell
+# Windows
+./scripts/preflight.ps1
+
+# Linux/Mac
+./scripts/preflight.sh
+```
+
+### Apply Jobs/Logs Migration
+```sql
+-- Run in Supabase SQL Editor:
+-- backend/migrations/create_jobs_tables.sql
+```
+
+### Documentation
+- `docs/ops/AGENT_BRIEF.md` - How to work in this repo
+- `docs/ops/RUNBOOKS.md` - Troubleshooting guides
+- `docs/ops/LEARNINGS_LOG.md` - Lessons learned ledger
+
+### Jobs Dashboard
+Navigate to `/dashboard/jobs` to view background job status and logs.
+
+---
+
 ## Architecture Overview
 
 ```mermaid
