@@ -85,3 +85,49 @@ def _ensure_registered() -> None:
     
     register_specialization("vanilla", VanillaSpecialization)
     register_specialization("vc", VCSpecialization)
+
+
+# Tier configuration for specializations
+_TIER_CONFIG = {
+    "vanilla": {"tier": "free", "icon": "🧠"},
+    "vc": {"tier": "free", "icon": "💼"},  # Temporarily free for development
+    "legal": {"tier": "premium", "icon": "⚖️", "coming_soon": True},
+    "medical": {"tier": "premium", "icon": "🏥", "coming_soon": True},
+}
+
+
+def get_all_specializations():
+    """
+    Get all available specializations with metadata for UI display.
+    
+    Returns:
+        List of specialization dicts with id, name, description, tier, icon
+    """
+    _ensure_registered()
+    
+    result = []
+    for name, spec_class in _REGISTRY.items():
+        spec = spec_class()
+        tier_info = _TIER_CONFIG.get(name, {"tier": "free", "icon": "🧠"})
+        result.append({
+            "id": name,
+            "name": spec.display_name,
+            "description": spec.description,
+            "tier": tier_info.get("tier", "free"),
+            "icon": tier_info.get("icon", "🧠"),
+            "coming_soon": tier_info.get("coming_soon", False)
+        })
+    
+    # Add coming soon specializations
+    for name, tier_info in _TIER_CONFIG.items():
+        if tier_info.get("coming_soon") and name not in _REGISTRY:
+            result.append({
+                "id": name,
+                "name": name.title() + " Brain",
+                "description": f"Specialized for {name} operations",
+                "tier": tier_info.get("tier", "premium"),
+                "icon": tier_info.get("icon", "🧠"),
+                "coming_soon": True
+            })
+    
+    return result

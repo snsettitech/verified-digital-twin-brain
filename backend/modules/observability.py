@@ -22,10 +22,12 @@ try:
 except Exception as e:
     raise ValueError(f"Failed to initialize Supabase client: {e}. Please check your SUPABASE_URL and SUPABASE_KEY environment variables.")
 
-def create_conversation(twin_id: str, user_id: str = None):
+def create_conversation(twin_id: str, user_id: str = None, group_id: str = None):
     data = {"twin_id": twin_id}
     if user_id:
         data["user_id"] = user_id
+    if group_id:
+        data["group_id"] = group_id
     response = supabase.table("conversations").insert(data).execute()
     return response.data[0] if response.data else None
 

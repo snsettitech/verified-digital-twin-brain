@@ -1,11 +1,15 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import InterviewInterface from '../../../components/Chat/InterviewInterface';
 import BrainGraph from '../../../components/Brain/BrainGraph';
+import { useTwin } from '@/lib/context/TwinContext';
 
 export default function RightBrainPage() {
-    const [activeTwin, setActiveTwin] = useState('eeeed554-9180-4229-a9af-0f8dd2c69e9b');
+    const router = useRouter();
+    const { activeTwin, isLoading, twins } = useTwin();
+
     const [refreshGraphTrigger, setRefreshGraphTrigger] = useState(0);
     const [nodeCount, setNodeCount] = useState(0);
     const [sessionTime, setSessionTime] = useState(0);
@@ -18,6 +22,13 @@ export default function RightBrainPage() {
         return () => clearInterval(interval);
     }, []);
 
+    // Redirect to onboarding if no twins
+    useEffect(() => {
+        if (!isLoading && twins.length === 0) {
+            router.push('/onboarding');
+        }
+    }, [isLoading, twins, router]);
+
     const formatTime = (seconds: number) => {
         const mins = Math.floor(seconds / 60);
         const secs = seconds % 60;
@@ -28,6 +39,42 @@ export default function RightBrainPage() {
         setRefreshGraphTrigger(prev => prev + 1);
         setNodeCount(prev => prev + 1);
     };
+
+    // Loading state
+    if (isLoading) {
+        return (
+            <div className="flex items-center justify-center h-[calc(100vh-theme(spacing.20))]">
+                <div className="text-center">
+                    <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-slate-500">Loading your twin...</p>
+                </div>
+            </div>
+        );
+    }
+
+    // No twin state
+    if (!activeTwin) {
+        return (
+            <div className="flex items-center justify-center h-[calc(100vh-theme(spacing.20))]">
+                <div className="text-center max-w-md">
+                    <div className="w-16 h-16 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                        <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                        </svg>
+                    </div>
+                    <h2 className="text-2xl font-bold text-slate-900 mb-2">Create Your Twin First</h2>
+                    <p className="text-slate-500 mb-6">You need to create a digital twin before starting the cognitive interview.</p>
+                    <button
+                        onClick={() => router.push('/onboarding')}
+                        className="px-6 py-3 bg-gradient-to-r from-indigo-500 to-purple-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
+                    >
+                        Create Your Twin
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
 
     return (
         <div className="flex flex-col h-[calc(100vh-theme(spacing.20))] p-6 md:p-10 max-w-[1920px] mx-auto w-full bg-gradient-to-br from-slate-50 via-white to-indigo-50/30">
@@ -80,7 +127,7 @@ export default function RightBrainPage() {
                 {/* Left Pane: Interview Chat */}
                 <div className="flex flex-col h-full min-h-0">
                     <InterviewInterface
-                        twinId={activeTwin}
+                        twinId={activeTwin.id}
                         onGraphUpdate={handleGraphUpdate}
                     />
                 </div>
@@ -102,7 +149,7 @@ export default function RightBrainPage() {
                     </div>
 
                     <BrainGraph
-                        twinId={activeTwin}
+                        twinId={activeTwin.id}
                         refreshTrigger={refreshGraphTrigger}
                     />
 

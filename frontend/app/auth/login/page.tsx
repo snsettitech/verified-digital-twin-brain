@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getSupabaseClient } from '@/lib/supabase/client';
 
-export default function LoginPage() {
+// Inner component that uses useSearchParams
+function LoginForm() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const redirectTo = searchParams.get('redirect') || '/dashboard';
@@ -138,8 +139,8 @@ export default function LoginPage() {
                     <button
                         onClick={() => setMode('password')}
                         className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${mode === 'password'
-                                ? 'bg-white/10 text-white'
-                                : 'text-slate-400 hover:text-white'
+                            ? 'bg-white/10 text-white'
+                            : 'text-slate-400 hover:text-white'
                             }`}
                     >
                         Password
@@ -147,8 +148,8 @@ export default function LoginPage() {
                     <button
                         onClick={() => setMode('magic')}
                         className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${mode === 'magic'
-                                ? 'bg-white/10 text-white'
-                                : 'text-slate-400 hover:text-white'
+                            ? 'bg-white/10 text-white'
+                            : 'text-slate-400 hover:text-white'
                             }`}
                     >
                         Magic Link
@@ -230,5 +231,24 @@ export default function LoginPage() {
                 </Link>
             </p>
         </div>
+    );
+}
+
+// Loading fallback for Suspense
+function LoginFormFallback() {
+    return (
+        <div className="text-center py-12">
+            <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+            <p className="text-slate-400">Loading...</p>
+        </div>
+    );
+}
+
+// Main export wrapped in Suspense
+export default function LoginPage() {
+    return (
+        <Suspense fallback={<LoginFormFallback />}>
+            <LoginForm />
+        </Suspense>
     );
 }

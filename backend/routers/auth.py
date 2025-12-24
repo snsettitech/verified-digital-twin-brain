@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Dict, Any, Optional
+from pydantic import BaseModel
+from datetime import datetime
 from modules.auth_guard import verify_owner, get_current_user
 from modules.schemas import (
     ApiKeyCreateRequest, ApiKeyUpdateRequest, UserInvitationCreateRequest,
@@ -11,6 +13,141 @@ from modules.user_management import list_users, invite_user, delete_user
 from modules.observability import supabase
 
 router = APIRouter(tags=["auth"])
+
+# ============================================================================
+# User Registration & Profile
+# ============================================================================
+
+class UserProfile(BaseModel):
+    id: str
+    email: str
+    full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    tenant_id: Optional[str] = None
+    onboarding_completed: bool = False
+    created_at: Optional[str] = None
+
+class SyncUserResponse(BaseModel):
+    status: str  # 'created' or 'exists'
+    user: UserProfile
+    needs_onboarding: bool = False
+
+@router.post("/auth/sync-user", response_model=SyncUserResponse)
+async def sync_user(user=Depends(get_current_user)):
+    """
+    Sync Supabase auth user to our users table.
+    
+    Called after OAuth/magic link login to ensure user exists in our DB.
+    Creates user record and default tenant if first login.
+    """
+    user_id = user.get("user_id")
+    email = user.get("email", "")
+    
+    # Check if user already exists in our users table
+    existing = supabase.table("users").select("*, tenants(id, name)").eq("id", user_id).execute()
+    
+    if existing.data and len(existing.data) > 0:
+        # User exists - return profile
+        user_data = existing.data[0]
+        tenant_id = None
+        if user_data.get("tenants"):
+            tenant_id = user_data["tenants"].get("id") if isinstance(user_data["tenants"], dict) else None
+        
+        # Check if they have any twins (onboarding complete if yes)
+        twins_check = supabase.table("twins").select("id").eq("owner_id", user_id).limit(1).execute()
+        has_twins = bool(twins_check.data)
+        
+        return SyncUserResponse(
+            status="exists",
+            user=UserProfile(
+                id=user_id,
+                email=user_data.get("email", email),
+                full_name=user_data.get("full_name"),
+                avatar_url=user_data.get("avatar_url"),
+                tenant_id=tenant_id,
+                onboarding_completed=has_twins,
+                created_at=user_data.get("created_at")
+            ),
+            needs_onboarding=not has_twins
+        )
+    
+    # First login - create user record
+    # Get additional metadata from the auth token
+    full_name = user.get("name") or user.get("user_metadata", {}).get("full_name") or email.split("@")[0]
+    avatar_url = user.get("avatar_url") or user.get("user_metadata", {}).get("avatar_url")
+    
+    # Create user record
+    user_insert = supabase.table("users").insert({
+        "id": user_id,
+        "email": email,
+        "full_name": full_name,
+        "avatar_url": avatar_url,
+        "created_at": datetime.utcnow().isoformat()
+    }).execute()
+    
+    # Create default tenant for this user
+    tenant_insert = supabase.table("tenants").insert({
+        "owner_id": user_id,
+        "name": f"{full_name}'s Workspace"
+    }).execute()
+    
+    tenant_id = tenant_insert.data[0]["id"] if tenant_insert.data else None
+    
+    return SyncUserResponse(
+        status="created",
+        user=UserProfile(
+            id=user_id,
+            email=email,
+            full_name=full_name,
+            avatar_url=avatar_url,
+            tenant_id=tenant_id,
+            onboarding_completed=False,
+            created_at=datetime.utcnow().isoformat()
+        ),
+        needs_onboarding=True
+    )
+
+@router.get("/auth/me", response_model=UserProfile)
+async def get_current_user_profile(user=Depends(get_current_user)):
+    """Get current user's profile including tenant and onboarding status."""
+    user_id = user.get("user_id")
+    
+    # Get user with tenant
+    result = supabase.table("users").select("*, tenants(id, name)").eq("id", user_id).execute()
+    
+    if not result.data:
+        raise HTTPException(status_code=404, detail="User profile not found. Please call /auth/sync-user first.")
+    
+    user_data = result.data[0]
+    tenant_id = None
+    if user_data.get("tenants"):
+        tenant_id = user_data["tenants"].get("id") if isinstance(user_data["tenants"], dict) else None
+    
+    # Check onboarding status
+    twins_check = supabase.table("twins").select("id").eq("owner_id", user_id).limit(1).execute()
+    has_twins = bool(twins_check.data)
+    
+    return UserProfile(
+        id=user_id,
+        email=user_data.get("email", ""),
+        full_name=user_data.get("full_name"),
+        avatar_url=user_data.get("avatar_url"),
+        tenant_id=tenant_id,
+        onboarding_completed=has_twins,
+        created_at=user_data.get("created_at")
+    )
+
+@router.get("/auth/my-twins")
+async def get_my_twins(user=Depends(get_current_user)):
+    """Get all twins owned by the current user."""
+    user_id = user.get("user_id")
+    
+    result = supabase.table("twins").select("*").eq("owner_id", user_id).execute()
+    
+    return {
+        "twins": result.data if result.data else [],
+        "count": len(result.data) if result.data else 0
+    }
 
 # API Keys
 @router.post("/api-keys")

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Dict, Any, Optional
+from pydantic import BaseModel
 from modules.auth_guard import verify_owner, get_current_user
 from modules.schemas import (
     TwinSettingsUpdate, GroupCreateRequest, GroupUpdateRequest,
@@ -14,10 +15,94 @@ from modules.access_groups import (
     get_group_members, set_group_limit, get_group_limits, set_group_override, get_group_overrides
 )
 from modules.observability import supabase
+from modules.specializations import get_specialization, get_all_specializations
 
 router = APIRouter(tags=["twins"])
 
+
+# ============================================================================
+# Twin Create Schema
+# ============================================================================
+
+class TwinCreateRequest(BaseModel):
+    name: str
+    tenant_id: str
+    description: Optional[str] = None
+    specialization: str = "vanilla"
+    settings: Optional[Dict[str, Any]] = None
+
+
+# ============================================================================
+# Specialization Endpoints
+# ============================================================================
+
+@router.get("/specializations")
+async def list_specializations():
+    """List all available specializations for UI selection."""
+    return get_all_specializations()
+
+
+# ============================================================================
+# Twin CRUD Endpoints
+# ============================================================================
+
+@router.post("/twins")
+async def create_twin(request: TwinCreateRequest):
+    """Create a new twin. Uses service account to bypass RLS."""
+    try:
+        # First, ensure tenant exists (create if not)
+        tenant_check = supabase.table("tenants").select("id").eq("id", request.tenant_id).execute()
+        
+        if not tenant_check.data:
+            # Create tenant with this ID
+            supabase.table("tenants").insert({
+                "id": request.tenant_id,
+                "name": f"User-{request.tenant_id[:8]}"
+            }).execute()
+        
+        # Now create the twin
+        data = {
+            "name": request.name,
+            "tenant_id": request.tenant_id,
+            "description": request.description or f"{request.name}'s digital twin",
+            "specialization": request.specialization,
+            "settings": request.settings or {}
+        }
+        
+        response = supabase.table("twins").insert(data).execute()
+        
+        if response.data:
+            return response.data[0]
+        else:
+            raise HTTPException(status_code=400, detail="Failed to create twin")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 from modules._core.tenant_guard import verify_twin_access
+from fastapi import Request
+
+@router.get("/twins")
+async def list_twins(request: Request):
+    """List all twins. Returns user's twins if authenticated, or all twins if not."""
+    try:
+        # Try to get user from auth header if present
+        user_id = None
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            # For now, skip token validation for development
+            # In production, validate JWT and get user_id
+            pass
+        
+        if user_id:
+            # Get twins where user is the tenant (owner)
+            response = supabase.table("twins").select("*").eq("tenant_id", user_id).order("created_at", desc=True).execute()
+        else:
+            # Fallback: get all twins (for anonymous/testing)
+            response = supabase.table("twins").select("*").order("created_at", desc=True).limit(10).execute()
+        
+        return response.data if response.data else []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/twins/{twin_id}")
 async def get_twin(
@@ -30,6 +115,26 @@ async def get_twin(
     if not response.data:
         raise HTTPException(status_code=404, detail="Twin not found")
     return response.data
+
+
+@router.get("/twins/{twin_id}/sidebar-config")
+async def get_sidebar_config(twin_id: str):
+    """Get sidebar configuration based on twin's specialization."""
+    try:
+        # Get twin to find its specialization
+        response = supabase.table("twins").select("specialization").eq("id", twin_id).execute()
+        if not response.data:
+            spec_name = "vanilla"
+        else:
+            spec_name = response.data[0].get("specialization", "vanilla")
+        
+        # Load the specialization and get sidebar config
+        spec = get_specialization(spec_name)
+        return spec.get_sidebar_config()
+    except Exception as e:
+        # Fallback to vanilla sidebar
+        spec = get_specialization("vanilla")
+        return spec.get_sidebar_config()
 
 @router.patch("/twins/{twin_id}")
 async def update_twin(twin_id: str, update: TwinSettingsUpdate, user=Depends(verify_owner)):

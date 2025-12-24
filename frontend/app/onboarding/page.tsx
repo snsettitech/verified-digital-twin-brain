@@ -6,6 +6,7 @@ import { getSupabaseClient } from '@/lib/supabase/client';
 import {
     Wizard,
     WelcomeStep,
+    ChooseSpecializationStep,
     ClaimIdentityStep,
     DefineExpertiseStep,
     AddContentStep,
@@ -15,9 +16,10 @@ import {
     LaunchStep
 } from '@/components/onboarding';
 
-// 8-Step Delphi-Style Onboarding
+// 9-Step Delphi-Style Onboarding with Specialization
 const WIZARD_STEPS = [
     { id: 'welcome', title: 'Welcome', description: 'Get started', icon: '👋' },
+    { id: 'specialization', title: 'Brain Type', description: 'Choose type', icon: '🧠' },
     { id: 'identity', title: 'Identity', description: 'Claim your name', icon: '✨' },
     { id: 'expertise', title: 'Expertise', description: 'Define domains', icon: '🎯' },
     { id: 'content', title: 'Content', description: 'Add knowledge', icon: '📚' },
@@ -46,6 +48,9 @@ export default function OnboardingPage() {
     // State
     const [currentStep, setCurrentStep] = useState(0);
     const [twinId, setTwinId] = useState<string | null>(null);
+
+    // Step 1: Specialization
+    const [selectedSpecialization, setSelectedSpecialization] = useState('vanilla');
 
     // Step 2: Identity
     const [twinName, setTwinName] = useState('');
@@ -95,23 +100,23 @@ export default function OnboardingPage() {
     };
 
     const handleStepChange = async (newStep: number) => {
-        // Create twin after identity step
-        if (currentStep === 1 && newStep === 2 && twinName && !twinId) {
+        // Create twin after identity step (now step 2 -> 3)
+        if (currentStep === 2 && newStep === 3 && twinName && !twinId) {
             await createTwin();
         }
 
-        // Upload content after content step
-        if (currentStep === 3 && newStep === 4 && twinId) {
+        // Upload content after content step (now step 4 -> 5)
+        if (currentStep === 4 && newStep === 5 && twinId) {
             await uploadContent();
         }
 
-        // Save FAQs after FAQ step
-        if (currentStep === 4 && newStep === 5 && twinId) {
+        // Save FAQs after FAQ step (now step 5 -> 6)
+        if (currentStep === 5 && newStep === 6 && twinId) {
             await saveFaqs();
         }
 
-        // Save personality after personality step
-        if (currentStep === 5 && newStep === 6 && twinId) {
+        // Save personality after personality step (now step 6 -> 7)
+        if (currentStep === 6 && newStep === 7 && twinId) {
             await savePersonality();
         }
 
@@ -123,6 +128,7 @@ export default function OnboardingPage() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
+            const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
             const expertiseText = [...selectedDomains, ...customExpertise].join(', ');
 
             const systemInstructions = `You are ${twinName}${tagline ? `, ${tagline}` : ''}.
@@ -131,26 +137,35 @@ Communication style: ${personality.tone}, ${personality.responseLength} response
 ${personality.firstPerson ? 'Speak in first person ("I believe...")' : `Refer to yourself as ${twinName}`}
 ${personality.customInstructions ? `Additional instructions: ${personality.customInstructions}` : ''}`;
 
-            const { data, error } = await supabase
-                .from('twins')
-                .insert({
+            // Debug: Log what we're saving
+            console.log('Creating twin with specialization:', selectedSpecialization);
+
+            // Call backend API to create twin (bypasses RLS)
+            const response = await fetch(`${backendUrl}/twins`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
                     name: twinName,
                     tenant_id: user.id,
-                    owner_id: user.id,
-                    system_instructions: systemInstructions,
-                    specialization_id: 'vanilla',
+                    description: tagline || `${twinName}'s digital twin`,
+                    specialization: selectedSpecialization,
                     settings: {
+                        system_prompt: systemInstructions,
                         handle,
                         tagline,
                         expertise: [...selectedDomains, ...customExpertise],
                         personality
                     }
                 })
-                .select()
-                .single();
+            });
 
-            if (!error && data) {
+            if (response.ok) {
+                const data = await response.json();
+                console.log('Twin created:', data);
                 setTwinId(data.id);
+            } else {
+                const error = await response.json();
+                console.error('Error creating twin:', error);
             }
         } catch (error) {
             console.error('Error creating twin:', error);
@@ -221,6 +236,7 @@ ${personality.customInstructions ? `Additional instructions: ${personality.custo
         if (!twinId) return;
 
         const expertiseText = [...selectedDomains, ...customExpertise].join(', ');
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
         const systemInstructions = `You are ${twinName}${tagline ? `, ${tagline}` : ''}.
 Your areas of expertise include: ${expertiseText || 'general topics'}.
@@ -229,18 +245,21 @@ ${personality.firstPerson ? 'Speak in first person ("I believe...")' : `Refer to
 ${personality.customInstructions ? `Additional instructions: ${personality.customInstructions}` : ''}`;
 
         try {
-            await supabase
-                .from('twins')
-                .update({
-                    system_instructions: systemInstructions,
+            // Use backend PATCH endpoint
+            await fetch(`${backendUrl}/twins/${twinId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    description: tagline || `${twinName}'s digital twin`,
                     settings: {
+                        system_prompt: systemInstructions,
                         handle,
                         tagline,
                         expertise: [...selectedDomains, ...customExpertise],
                         personality
                     }
                 })
-                .eq('id', twinId);
+            });
         } catch (error) {
             console.error('Error saving personality:', error);
         }
@@ -249,13 +268,8 @@ ${personality.customInstructions ? `Additional instructions: ${personality.custo
     const handleLaunch = async () => {
         if (!twinId) return;
 
-        // Mark twin as active
-        await supabase
-            .from('twins')
-            .update({ is_active: true })
-            .eq('id', twinId);
-
-        // Save onboarding completed flag
+        // Save the active twin ID and onboarding completed flag
+        localStorage.setItem('activeTwinId', twinId);
         localStorage.setItem('onboardingCompleted', 'true');
     };
 
@@ -273,6 +287,13 @@ ${personality.customInstructions ? `Additional instructions: ${personality.custo
                 return <WelcomeStep />;
             case 1:
                 return (
+                    <ChooseSpecializationStep
+                        selectedSpecialization={selectedSpecialization}
+                        onSpecializationChange={setSelectedSpecialization}
+                    />
+                );
+            case 2:
+                return (
                     <ClaimIdentityStep
                         twinName={twinName}
                         handle={handle}
@@ -282,7 +303,7 @@ ${personality.customInstructions ? `Additional instructions: ${personality.custo
                         onTaglineChange={setTagline}
                     />
                 );
-            case 2:
+            case 3:
                 return (
                     <DefineExpertiseStep
                         selectedDomains={selectedDomains}
@@ -291,7 +312,7 @@ ${personality.customInstructions ? `Additional instructions: ${personality.custo
                         onCustomExpertiseChange={setCustomExpertise}
                     />
                 );
-            case 3:
+            case 4:
                 return (
                     <AddContentStep
                         onFileUpload={handleFileUpload}
@@ -300,7 +321,7 @@ ${personality.customInstructions ? `Additional instructions: ${personality.custo
                         pendingUrls={pendingUrls}
                     />
                 );
-            case 4:
+            case 5:
                 return (
                     <SeedFAQsStep
                         faqs={faqs}
@@ -308,7 +329,7 @@ ${personality.customInstructions ? `Additional instructions: ${personality.custo
                         expertiseDomains={selectedDomains}
                     />
                 );
-            case 5:
+            case 6:
                 return (
                     <SetPersonalityStep
                         personality={personality}
@@ -316,7 +337,7 @@ ${personality.customInstructions ? `Additional instructions: ${personality.custo
                         twinName={twinName || 'Your Twin'}
                     />
                 );
-            case 6:
+            case 7:
                 return (
                     <PreviewTwinStep
                         twinId={twinId}
@@ -324,7 +345,7 @@ ${personality.customInstructions ? `Additional instructions: ${personality.custo
                         tagline={tagline}
                     />
                 );
-            case 7:
+            case 8:
                 return (
                     <LaunchStep
                         twinName={twinName || 'Your Twin'}
@@ -344,7 +365,7 @@ ${personality.customInstructions ? `Additional instructions: ${personality.custo
             currentStep={currentStep}
             onStepChange={handleStepChange}
             onComplete={handleComplete}
-            allowSkip={currentStep === 3 || currentStep === 4} // Allow skip on content and FAQ steps
+            allowSkip={currentStep === 4 || currentStep === 5} // Allow skip on content and FAQ steps
         >
             {renderStep()}
         </Wizard>

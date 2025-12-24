@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useSpecialization } from '../contexts/SpecializationContext';
+import { TwinSelector } from './ui/TwinSelector';
 
 // --- Icons ---
 function getIcon(name: string) {
@@ -56,6 +57,24 @@ export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const { config, loading } = useSpecialization();
 
+  // Active twin state
+  const [activeTwinId, setActiveTwinId] = useState<string | null>(null);
+
+  // Load active twin from localStorage on mount
+  useEffect(() => {
+    const storedTwinId = localStorage.getItem('activeTwinId');
+    if (storedTwinId) {
+      setActiveTwinId(storedTwinId);
+    }
+  }, []);
+
+  const handleTwinChange = (twinId: string) => {
+    setActiveTwinId(twinId);
+    localStorage.setItem('activeTwinId', twinId);
+    // Note: Components using this should listen to activeTwinId changes
+    // or use localStorage events to update their data
+  };
+
   // Use dynamic sidebar from config, or fallback
   const sections = (config && config.sidebar && config.sidebar.sections)
     ? config.sidebar.sections
@@ -77,6 +96,16 @@ export default function Sidebar() {
           )}
         </Link>
       </div>
+
+      {/* Twin Selector */}
+      {!collapsed && (
+        <div className="relative border-b border-slate-800/50">
+          <TwinSelector
+            activeTwinId={activeTwinId}
+            onTwinChange={handleTwinChange}
+          />
+        </div>
+      )}
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-6 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">

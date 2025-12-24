@@ -14,7 +14,8 @@ from routers import (
     specializations,
     observability,
     cognitive,
-    graph
+    graph,
+    metrics
 )
 from modules.specializations import get_specialization
 
@@ -43,6 +44,7 @@ app.include_router(specializations.router)
 app.include_router(observability.router)
 app.include_router(cognitive.router)
 app.include_router(graph.router)
+app.include_router(metrics.router)
 
 # Startup Logic
 import socket
