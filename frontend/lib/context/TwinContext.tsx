@@ -62,10 +62,23 @@ export function TwinProvider({ children }: { children: React.ReactNode }) {
     const supabase = getSupabaseClient();
     const API_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
-    // Get auth token
+    // Get auth token (with timeout to prevent hanging)
     const getToken = useCallback(async (): Promise<string | null> => {
-        const { data: { session } } = await supabase.auth.getSession();
-        return session?.access_token || null;
+        try {
+            const timeoutPromise = new Promise<null>((resolve) => {
+                setTimeout(() => resolve(null), 2000);
+            });
+
+            const result = await Promise.race([
+                supabase.auth.getSession(),
+                timeoutPromise
+            ]) as any;
+
+            return result?.data?.session?.access_token || null;
+        } catch (e) {
+            console.warn('[TwinContext] getToken failed:', e);
+            return null;
+        }
     }, [supabase]);
 
     // Sync user with backend (creates user record if first login)
@@ -98,31 +111,50 @@ export function TwinProvider({ children }: { children: React.ReactNode }) {
 
     // Fetch user's twins
     const refreshTwins = useCallback(async () => {
+        console.log('[TwinContext] refreshTwins called');
         try {
             const token = await getToken();
-            if (!token) return;
 
-            const response = await fetch(`${API_URL}/auth/my-twins`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
+            let data = null;
+
+            if (token) {
+                // Try authenticated endpoint
+                console.log('[TwinContext] Trying authenticated /auth/my-twins');
+                const response = await fetch(`${API_URL}/auth/my-twins`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (response.ok) {
+                    data = await response.json();
+                } else {
+                    console.warn('Failed to fetch twins from auth endpoint:', response.statusText);
                 }
-            });
-
-            if (!response.ok) {
-                console.error('Failed to fetch twins:', response.statusText);
-                return;
             }
 
-            const data = await response.json();
-            setTwins(data.twins || []);
+            // Fallback to public endpoint if auth failed or no token
+            if (!data) {
+                console.log('[TwinContext] Trying public /twins endpoint');
+                const publicResponse = await fetch(`${API_URL}/twins`);
+                if (publicResponse.ok) {
+                    const publicData = await publicResponse.json();
+                    data = { twins: publicData };
+                }
+            }
 
-            // Set active twin from localStorage or first twin
-            const savedTwinId = localStorage.getItem('activeTwinId');
-            const activeTwinFromList = data.twins?.find((t: Twin) => t.id === savedTwinId) || data.twins?.[0];
+            if (data) {
+                console.log('[TwinContext] Got twins:', data.twins?.length || 0);
+                setTwins(data.twins || []);
 
-            if (activeTwinFromList) {
-                setActiveTwinState(activeTwinFromList);
-                localStorage.setItem('activeTwinId', activeTwinFromList.id);
+                // Set active twin from localStorage or first twin
+                const savedTwinId = localStorage.getItem('activeTwinId');
+                const activeTwinFromList = data.twins?.find((t: Twin) => t.id === savedTwinId) || data.twins?.[0];
+
+                if (activeTwinFromList) {
+                    setActiveTwinState(activeTwinFromList);
+                    localStorage.setItem('activeTwinId', activeTwinFromList.id);
+                }
             }
         } catch (error) {
             console.error('Error fetching twins:', error);
@@ -143,18 +175,48 @@ export function TwinProvider({ children }: { children: React.ReactNode }) {
         let mounted = true;
 
         const initialize = async () => {
+            console.log('[TwinContext] Starting initialization...');
             setIsLoading(true);
 
-            const { data: { session } } = await supabase.auth.getSession();
+            try {
+                // Try to get session with a timeout to prevent hanging
+                console.log('[TwinContext] Getting session with timeout...');
 
-            if (session && mounted) {
-                // Sync user and fetch twins
-                await syncUser();
-                await refreshTwins();
-            }
+                // Create a promise that rejects after 3 seconds
+                const timeoutPromise = new Promise((_, reject) => {
+                    setTimeout(() => reject(new Error('Session timeout')), 3000);
+                });
 
-            if (mounted) {
-                setIsLoading(false);
+                // Race the session fetch against the timeout
+                let session = null;
+                try {
+                    const result = await Promise.race([
+                        supabase.auth.getSession(),
+                        timeoutPromise
+                    ]) as any;
+                    session = result?.data?.session;
+                    console.log('[TwinContext] Session result:', session ? 'exists' : 'null');
+                } catch (e) {
+                    console.warn('[TwinContext] Session fetch timed out or failed, continuing without auth');
+                }
+
+                if (mounted) {
+                    if (session) {
+                        console.log('[TwinContext] Calling syncUser...');
+                        await syncUser();
+                        console.log('[TwinContext] syncUser done, calling refreshTwins...');
+                    }
+                    // Always try to fetch twins (even without session, some endpoints may be public)
+                    await refreshTwins();
+                    console.log('[TwinContext] refreshTwins complete');
+                }
+            } catch (error) {
+                console.error('[TwinContext] Initialization error:', error);
+            } finally {
+                console.log('[TwinContext] Finally block, setting isLoading to false');
+                if (mounted) {
+                    setIsLoading(false);
+                }
             }
         };
 

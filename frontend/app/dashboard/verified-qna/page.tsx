@@ -1,7 +1,9 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
+import { useTwin } from '@/lib/context/TwinContext';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface VerifiedQnA {
   id: string;
@@ -15,6 +17,8 @@ interface VerifiedQnA {
 }
 
 export default function VerifiedQnAPage() {
+  const { activeTwin, isLoading: twinLoading } = useTwin();
+  const { get, patch, del } = useAuthFetch();
   const [qnaList, setQnaList] = useState<VerifiedQnA[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -23,32 +27,20 @@ export default function VerifiedQnAPage() {
   const [editReason, setEditReason] = useState('');
   const [saving, setSaving] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [twinId, setTwinId] = useState<string>(''); // TODO: Get from auth context
 
-  // For demo, you may need to get twin_id from context or route params
-  useEffect(() => {
-    // Fetch twin_id - in production, get from auth/user context
-    // For now, using the same twin ID used in the dashboard
-    const tid = 'eeeed554-9180-4229-a9af-0f8dd2c69e9b';
-    setTwinId(tid);
-    fetchVerifiedQnA(tid);
-  }, []);
+  const twinId = activeTwin?.id;
 
-  const fetchVerifiedQnA = async (tid: string) => {
+  const fetchVerifiedQnA = useCallback(async () => {
+    if (!twinId) return;
     try {
-      const response = await fetch(`http://localhost:8000/twins/${tid}/verified-qna`, {
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const response = await get(`/twins/${twinId}/verified-qna`);
       if (response.ok) {
         const data = await response.json();
         // Fetch group information for each QnA
         const qnaWithGroups = await Promise.all(
           data.map(async (qna: VerifiedQnA) => {
             try {
-              const groupsRes = await fetch(
-                `http://localhost:8000/content/verified_qna/${qna.id}/groups`,
-                { headers: { 'Authorization': 'Bearer development_token' } }
-              );
+              const groupsRes = await get(`/content/verified_qna/${qna.id}/groups`);
               if (groupsRes.ok) {
                 const groups = await groupsRes.json();
                 return { ...qna, groups };
@@ -66,7 +58,15 @@ export default function VerifiedQnAPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [twinId, get]);
+
+  useEffect(() => {
+    if (twinId) {
+      fetchVerifiedQnA();
+    } else if (!twinLoading) {
+      setLoading(false);
+    }
+  }, [twinId, twinLoading, fetchVerifiedQnA]);
 
   const handleEdit = (qna: VerifiedQnA) => {
     setEditingId(qna.id);
@@ -76,24 +76,16 @@ export default function VerifiedQnAPage() {
 
   const handleSaveEdit = async (id: string) => {
     if (!editAnswer.trim() || !editReason.trim()) return;
-    
+
     setSaving(true);
     try {
-      const response = await fetch(`http://localhost:8000/verified-qna/${id}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer development_token'
-        },
-        body: JSON.stringify({
-          answer: editAnswer,
-          reason: editReason
-        })
+      const response = await patch(`/verified-qna/${id}`, {
+        answer: editAnswer,
+        reason: editReason
       });
 
       if (response.ok) {
-        // Refresh the list
-        await fetchVerifiedQnA(twinId);
+        await fetchVerifiedQnA();
         setEditingId(null);
         setEditAnswer('');
         setEditReason('');
@@ -107,15 +99,11 @@ export default function VerifiedQnAPage() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this verified answer?')) return;
-    
-    try {
-      const response = await fetch(`http://localhost:8000/verified-qna/${id}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
 
+    try {
+      const response = await del(`/verified-qna/${id}`);
       if (response.ok) {
-        await fetchVerifiedQnA(twinId);
+        await fetchVerifiedQnA();
       }
     } catch (error) {
       console.error('Error deleting verified QnA:', error);
@@ -126,6 +114,33 @@ export default function VerifiedQnAPage() {
     qna.question.toLowerCase().includes(searchQuery.toLowerCase()) ||
     qna.answer.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  if (twinLoading) {
+    return (
+      <div className="flex justify-center p-20">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  if (!twinId) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center max-w-md p-8">
+          <div className="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <svg className="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-slate-900 mb-3">No Twin Found</h2>
+          <p className="text-slate-500 mb-6">Create a digital twin first to manage verified Q&A.</p>
+          <a href="/dashboard/right-brain" className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+            Create Your Twin
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col min-h-screen bg-[#f8fafc] text-slate-900 font-sans">
@@ -183,7 +198,7 @@ export default function VerifiedQnAPage() {
                   <div className="flex-1">
                     <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Question</div>
                     <div className="text-sm font-semibold text-slate-800 mb-4">{qna.question}</div>
-                    
+
                     {editingId === qna.id ? (
                       <div className="space-y-3">
                         <div>
@@ -229,7 +244,7 @@ export default function VerifiedQnAPage() {
                       <>
                         <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Answer</div>
                         <div className="text-sm text-slate-700 mb-4">{qna.answer}</div>
-                        
+
                         <div className="flex items-center gap-4 text-xs text-slate-500">
                           <span>Created: {new Date(qna.created_at).toLocaleDateString()}</span>
                           {qna.updated_at && qna.updated_at !== qna.created_at && (
@@ -263,17 +278,17 @@ export default function VerifiedQnAPage() {
                             </button>
                             {expandedId === qna.id && (
                               <div className="mt-2 space-y-2 border-t border-slate-100 pt-2">
-                                {qna.patches.map((patch) => (
-                                  <div key={patch.id} className="text-xs bg-slate-50 p-3 rounded-lg">
+                                {qna.patches.map((patchItem) => (
+                                  <div key={patchItem.id} className="text-xs bg-slate-50 p-3 rounded-lg">
                                     <div className="font-semibold text-slate-700 mb-1">
-                                      {new Date(patch.patched_at).toLocaleString()}
+                                      {new Date(patchItem.patched_at).toLocaleString()}
                                     </div>
-                                    {patch.reason && (
-                                      <div className="text-slate-600 mb-2">Reason: {patch.reason}</div>
+                                    {patchItem.reason && (
+                                      <div className="text-slate-600 mb-2">Reason: {patchItem.reason}</div>
                                     )}
                                     <div className="text-slate-500">
-                                      <div className="line-through mb-1">{patch.previous_answer.substring(0, 100)}...</div>
-                                      <div>{patch.new_answer.substring(0, 100)}...</div>
+                                      <div className="line-through mb-1">{patchItem.previous_answer.substring(0, 100)}...</div>
+                                      <div>{patchItem.new_answer.substring(0, 100)}...</div>
                                     </div>
                                   </div>
                                 ))}
@@ -284,7 +299,7 @@ export default function VerifiedQnAPage() {
                       </>
                     )}
                   </div>
-                  
+
                   {editingId !== qna.id && (
                     <div className="flex gap-2 ml-4">
                       <button

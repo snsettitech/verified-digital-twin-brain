@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { getSupabaseClient } from '@/lib/supabase/client';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface Job {
     id: string;
@@ -19,9 +19,8 @@ interface Job {
     completed_at: string | null;
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-
 export default function JobsPage() {
+    const { get } = useAuthFetch();
     const [jobs, setJobs] = useState<Job[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -31,23 +30,13 @@ export default function JobsPage() {
     const fetchJobs = useCallback(async () => {
         try {
             setLoading(true);
-            const supabase = getSupabaseClient();
-            const { data: { session } } = await supabase.auth.getSession();
-
-            if (!session) {
-                setError('Not authenticated');
-                return;
-            }
+            setError(null);
 
             const params = new URLSearchParams();
             if (statusFilter) params.append('status', statusFilter);
             if (typeFilter) params.append('job_type', typeFilter);
 
-            const response = await fetch(`${API_BASE_URL}/jobs?${params.toString()}`, {
-                headers: {
-                    'Authorization': `Bearer ${session.access_token}`
-                }
-            });
+            const response = await get(`/jobs?${params.toString()}`);
 
             if (!response.ok) {
                 throw new Error('Failed to fetch jobs');
@@ -60,7 +49,7 @@ export default function JobsPage() {
         } finally {
             setLoading(false);
         }
-    }, [statusFilter, typeFilter]);
+    }, [statusFilter, typeFilter, get]);
 
     useEffect(() => {
         fetchJobs();

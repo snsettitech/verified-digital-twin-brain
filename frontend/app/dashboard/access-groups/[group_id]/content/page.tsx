@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface ContentPermission {
   id: string;
@@ -24,8 +25,9 @@ interface VerifiedQnA {
 export default function GroupContentPage() {
   const params = useParams();
   const router = useRouter();
+  const { get, post, del } = useAuthFetch();
   const groupId = params.group_id as string;
-  
+
   const [permissions, setPermissions] = useState<ContentPermission[]>([]);
   const [loading, setLoading] = useState(true);
   const [contentType, setContentType] = useState<'source' | 'verified_qna'>('source');
@@ -35,26 +37,9 @@ export default function GroupContentPage() {
   const [granting, setGranting] = useState(false);
   const [twinId, setTwinId] = useState<string>('');
 
-  useEffect(() => {
-    fetchPermissions();
-    fetchGroupInfo();
-  }, [groupId]);
-
-  useEffect(() => {
-    if (twinId) {
-      if (contentType === 'source') {
-        fetchSources();
-      } else {
-        fetchVerifiedQnA();
-      }
-    }
-  }, [contentType, twinId]);
-
-  const fetchGroupInfo = async () => {
+  const fetchGroupInfo = useCallback(async () => {
     try {
-      const response = await fetch(`http://localhost:8000/access-groups/${groupId}`, {
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const response = await get(`/access-groups/${groupId}`);
       if (response.ok) {
         const group = await response.json();
         setTwinId(group.twin_id);
@@ -62,13 +47,11 @@ export default function GroupContentPage() {
     } catch (error) {
       console.error('Error fetching group info:', error);
     }
-  };
+  }, [groupId, get]);
 
-  const fetchPermissions = async () => {
+  const fetchPermissions = useCallback(async () => {
     try {
-      const response = await fetch(`http://localhost:8000/access-groups/${groupId}/permissions`, {
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const response = await get(`/access-groups/${groupId}/permissions`);
       if (response.ok) {
         const data = await response.json();
         setPermissions(data);
@@ -78,15 +61,13 @@ export default function GroupContentPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [groupId, get]);
 
-  const fetchSources = async () => {
+  const fetchSources = useCallback(async () => {
     if (!twinId) return;
-    
+
     try {
-      const response = await fetch(`http://localhost:8000/sources/${twinId}`, {
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const response = await get(`/sources/${twinId}`);
       if (response.ok) {
         const data = await response.json();
         setSources(data);
@@ -94,15 +75,13 @@ export default function GroupContentPage() {
     } catch (error) {
       console.error('Error fetching sources:', error);
     }
-  };
+  }, [twinId, get]);
 
-  const fetchVerifiedQnA = async () => {
+  const fetchVerifiedQnA = useCallback(async () => {
     if (!twinId) return;
-    
+
     try {
-      const response = await fetch(`http://localhost:8000/twins/${twinId}/verified-qna`, {
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const response = await get(`/twins/${twinId}/verified-qna`);
       if (response.ok) {
         const data = await response.json();
         setVerifiedQnA(data);
@@ -110,23 +89,31 @@ export default function GroupContentPage() {
     } catch (error) {
       console.error('Error fetching verified QnA:', error);
     }
-  };
+  }, [twinId, get]);
+
+  useEffect(() => {
+    fetchPermissions();
+    fetchGroupInfo();
+  }, [fetchPermissions, fetchGroupInfo]);
+
+  useEffect(() => {
+    if (twinId) {
+      if (contentType === 'source') {
+        fetchSources();
+      } else {
+        fetchVerifiedQnA();
+      }
+    }
+  }, [contentType, twinId, fetchSources, fetchVerifiedQnA]);
 
   const handleGrantAccess = async () => {
     if (selectedContentIds.length === 0) return;
-    
+
     setGranting(true);
     try {
-      const response = await fetch(`http://localhost:8000/access-groups/${groupId}/permissions`, {
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer development_token',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          content_type: contentType,
-          content_ids: selectedContentIds
-        })
+      const response = await post(`/access-groups/${groupId}/permissions`, {
+        content_type: contentType,
+        content_ids: selectedContentIds
       });
 
       if (response.ok) {
@@ -150,13 +137,7 @@ export default function GroupContentPage() {
     }
 
     try {
-      const response = await fetch(
-        `http://localhost:8000/access-groups/${groupId}/permissions/${contentType}/${contentId}`,
-        {
-          method: 'DELETE',
-          headers: { 'Authorization': 'Bearer development_token' }
-        }
-      );
+      const response = await del(`/access-groups/${groupId}/permissions/${contentType}/${contentId}`);
 
       if (response.ok) {
         fetchPermissions();
@@ -201,25 +182,23 @@ export default function GroupContentPage() {
           ← Back to Groups
         </button>
         <h1 className="text-3xl font-bold mb-4">Manage Content Access</h1>
-        
+
         <div className="flex gap-4 mb-4">
           <button
             onClick={() => setContentType('source')}
-            className={`px-4 py-2 rounded-lg ${
-              contentType === 'source'
+            className={`px-4 py-2 rounded-lg ${contentType === 'source'
                 ? 'bg-blue-600 text-white'
                 : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-            }`}
+              }`}
           >
             Sources
           </button>
           <button
             onClick={() => setContentType('verified_qna')}
-            className={`px-4 py-2 rounded-lg ${
-              contentType === 'verified_qna'
+            className={`px-4 py-2 rounded-lg ${contentType === 'verified_qna'
                 ? 'bg-blue-600 text-white'
                 : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-            }`}
+              }`}
           >
             Verified QnA
           </button>
@@ -235,7 +214,7 @@ export default function GroupContentPage() {
             availableContent.map((item) => {
               const hasAccess = hasPermission(item.id);
               if (hasAccess) return null; // Don't show items that already have access
-              
+
               return (
                 <label
                   key={item.id}
@@ -274,7 +253,7 @@ export default function GroupContentPage() {
             currentPermissions.map((permission) => {
               const content = availableContent.find(item => item.id === permission.content_id);
               if (!content) return null;
-              
+
               return (
                 <div
                   key={permission.id}

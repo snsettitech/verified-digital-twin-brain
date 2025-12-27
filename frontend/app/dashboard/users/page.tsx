@@ -1,12 +1,11 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
+import { useAuthFetch, API_BASE_URL } from '@/lib/hooks/useAuthFetch';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const AUTH_TOKEN = process.env.NEXT_PUBLIC_DEV_TOKEN || 'development_token';
 const FRONTEND_URL = process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000';
 
 interface User {
@@ -15,6 +14,27 @@ interface User {
   role: string;
   created_at: string;
   invited_at?: string;
+  last_active_at?: string;
+}
+
+function isOnline(dateStr: string): boolean {
+  if (!dateStr) return false;
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMinutes = (now.getTime() - date.getTime()) / (1000 * 60);
+  return diffMinutes < 5;
+}
+
+function formatLastActive(dateStr: string): string {
+  if (!dateStr) return 'Never';
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffDays = (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24);
+
+  if (diffDays < 1) {
+    return `Last seen ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  }
+  return `Last seen ${date.toLocaleDateString()}`;
 }
 
 const roleColors: Record<string, 'info' | 'warning' | 'success'> = {
@@ -45,6 +65,7 @@ function getAvatarColor(email: string): string {
 }
 
 export default function UsersPage() {
+  const { get, post, patch, del } = useAuthFetch();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -54,15 +75,9 @@ export default function UsersPage() {
   const [createdInvitation, setCreatedInvitation] = useState<{ url: string; email: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    fetchUsers();
-  }, []);
-
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/users`, {
-        headers: { 'Authorization': `Bearer ${AUTH_TOKEN}` }
-      });
+      const response = await get('/users');
       if (response.ok) {
         const data = await response.json();
         setUsers(data);
@@ -72,23 +87,20 @@ export default function UsersPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [get]);
+
+  useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
 
   const handleInviteUser = async () => {
     if (!inviteEmail.trim()) return;
 
     setInviting(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/users/invite`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${AUTH_TOKEN}`
-        },
-        body: JSON.stringify({
-          email: inviteEmail,
-          role: inviteRole
-        })
+      const response = await post('/users/invite', {
+        email: inviteEmail,
+        role: inviteRole
       });
 
       if (response.ok) {
@@ -114,14 +126,7 @@ export default function UsersPage() {
 
   const handleUpdateRole = async (userId: string, newRole: string) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/users/${userId}/role`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${AUTH_TOKEN}`
-        },
-        body: JSON.stringify({ role: newRole })
-      });
+      const response = await patch(`/users/${userId}/role`, { role: newRole });
 
       if (response.ok) {
         await fetchUsers();
@@ -138,10 +143,7 @@ export default function UsersPage() {
     if (!confirm(`Are you sure you want to remove ${email} from the team? This action cannot be undone.`)) return;
 
     try {
-      const response = await fetch(`${API_BASE_URL}/users/${userId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${AUTH_TOKEN}` }
-      });
+      const response = await del(`/users/${userId}`);
 
       if (response.ok) {
         await fetchUsers();
@@ -278,6 +280,17 @@ export default function UsersPage() {
                 </div>
 
                 <h3 className="font-bold text-slate-900 truncate mb-1">{user.email}</h3>
+
+                {user.last_active_at && (
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className={`w-2 h-2 rounded-full ${isOnline(user.last_active_at) ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'
+                      }`} />
+                    <span className="text-xs text-slate-500 font-medium">
+                      {isOnline(user.last_active_at) ? 'Active now' : formatLastActive(user.last_active_at)}
+                    </span>
+                  </div>
+                )}
+
                 <p className="text-sm text-slate-500 mb-4">
                   Joined {new Date(user.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                 </p>

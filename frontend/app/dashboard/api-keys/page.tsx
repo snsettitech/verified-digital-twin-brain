@@ -1,13 +1,11 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { useParams } from 'next/navigation';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const AUTH_TOKEN = process.env.NEXT_PUBLIC_DEV_TOKEN || 'development_token';
+import { useTwin } from '@/lib/context/TwinContext';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface ApiKey {
   id: string;
@@ -22,8 +20,9 @@ interface ApiKey {
 }
 
 export default function ApiKeysPage() {
-  const params = useParams();
-  const twinId = params?.twin_id as string || 'eeeed554-9180-4229-a9af-0f8dd2c69e9b';
+  const { activeTwin, isLoading: twinLoading } = useTwin();
+  const { get, post, del } = useAuthFetch();
+  const twinId = activeTwin?.id;
 
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,15 +33,10 @@ export default function ApiKeysPage() {
   const [createdKey, setCreatedKey] = useState<{ key: string; name: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    fetchApiKeys();
-  }, [twinId]);
-
-  const fetchApiKeys = async () => {
+  const fetchApiKeys = useCallback(async () => {
+    if (!twinId) return;
     try {
-      const response = await fetch(`${API_BASE_URL}/api-keys?twin_id=${twinId}`, {
-        headers: { 'Authorization': `Bearer ${AUTH_TOKEN}` }
-      });
+      const response = await get(`/api-keys?twin_id=${twinId}`);
       if (response.ok) {
         const data = await response.json();
         setApiKeys(data);
@@ -52,26 +46,27 @@ export default function ApiKeysPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [twinId, get]);
+
+  useEffect(() => {
+    if (twinId) {
+      fetchApiKeys();
+    } else if (!twinLoading) {
+      setLoading(false);
+    }
+  }, [twinId, twinLoading, fetchApiKeys]);
 
   const handleCreateKey = async () => {
-    if (!newKeyName.trim()) return;
+    if (!newKeyName.trim() || !twinId) return;
 
     setCreating(true);
     try {
       const domains = newKeyDomains.split(',').map(d => d.trim()).filter(d => d);
 
-      const response = await fetch(`${API_BASE_URL}/api-keys`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${AUTH_TOKEN}`
-        },
-        body: JSON.stringify({
-          twin_id: twinId,
-          name: newKeyName,
-          allowed_domains: domains.length > 0 ? domains : undefined
-        })
+      const response = await post('/api-keys', {
+        twin_id: twinId,
+        name: newKeyName,
+        allowed_domains: domains.length > 0 ? domains : undefined
       });
 
       if (response.ok) {
@@ -97,10 +92,7 @@ export default function ApiKeysPage() {
     if (!confirm('Are you sure you want to revoke this API key? It will stop working immediately.')) return;
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api-keys/${keyId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${AUTH_TOKEN}` }
-      });
+      const response = await del(`/api-keys/${keyId}`);
 
       if (response.ok) {
         await fetchApiKeys();
@@ -118,6 +110,33 @@ export default function ApiKeysPage() {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  if (twinLoading) {
+    return (
+      <div className="flex justify-center p-20">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
+  if (!twinId) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center max-w-md p-8">
+          <div className="w-16 h-16 bg-indigo-900/50 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <svg className="w-8 h-8 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path>
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-3">No Twin Found</h2>
+          <p className="text-slate-400 mb-6">Create a digital twin first to manage API keys.</p>
+          <a href="/dashboard/right-brain" className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+            Create Your Twin
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -170,8 +189,8 @@ export default function ApiKeysPage() {
                   <button
                     onClick={() => copyToClipboard(createdKey.key)}
                     className={`px-5 py-3 rounded-xl font-semibold transition-all ${copied
-                        ? 'bg-emerald-500 text-white'
-                        : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                      ? 'bg-emerald-500 text-white'
+                      : 'bg-emerald-600 text-white hover:bg-emerald-700'
                       }`}
                   >
                     {copied ? '✓ Copied!' : 'Copy Key'}
@@ -224,8 +243,8 @@ export default function ApiKeysPage() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-4">
                     <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${key.is_active
-                        ? 'bg-gradient-to-br from-indigo-100 to-purple-100'
-                        : 'bg-slate-100'
+                      ? 'bg-gradient-to-br from-indigo-100 to-purple-100'
+                      : 'bg-slate-100'
                       }`}>
                       <svg className={`w-6 h-6 ${key.is_active ? 'text-indigo-600' : 'text-slate-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path>

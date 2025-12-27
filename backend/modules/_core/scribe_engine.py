@@ -59,15 +59,35 @@ class GraphUpdates(BaseModel):
 
 # --- Core Functions ---
 
+# Import observe decorator for tracing
+try:
+    from langfuse import observe
+    _observe_available = True
+except ImportError:
+    _observe_available = False
+    def observe(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+
+@observe(name="scribe_extraction")
 async def process_interaction(
     twin_id: str, 
     user_message: str, 
     assistant_message: str,
-    history: List[Dict[str, Any]] = None
+    history: List[Dict[str, Any]] = None,
+    tenant_id: str = None,
+    conversation_id: str = None
 ) -> Dict[str, Any]:
     """
-    analyzes the interaction and updates the cognitive graph.
+    Analyzes the interaction and updates the cognitive graph.
+    Creates MemoryEvent BEFORE persist for audit trail.
     """
+    from modules.memory_events import create_memory_event, update_memory_event
+    
+    memory_event = None
+    
     try:
         client = get_async_openai_client()
         
@@ -121,7 +141,23 @@ async def process_interaction(
             
         logger.info(f"Scribe extracted: {len(updates.nodes)} nodes, {len(updates.edges)} edges, conf={updates.confidence}")
         
-        # Persist to Supabase
+        # 1. Create MemoryEvent BEFORE persist (audit trail)
+        if tenant_id:
+            memory_event = await create_memory_event(
+                twin_id=twin_id,
+                tenant_id=tenant_id,
+                event_type="auto_extract",
+                payload={
+                    "raw_nodes": [n.model_dump() for n in updates.nodes],
+                    "raw_edges": [e.model_dump() for e in updates.edges],
+                    "confidence": updates.confidence
+                },
+                status="applied",
+                source_type="chat_turn",
+                source_id=conversation_id
+            )
+        
+        # 2. Persist to Supabase
         created_nodes = await _persist_nodes(twin_id, updates.nodes)
         
         # Create map for Edges
@@ -136,22 +172,45 @@ async def process_interaction(
             if from_id and to_id:
                 valid_edges.append(edge)
             else:
-                # In strict mode, we might want to log this or handle partial edges
+                # In strict mode, log partial edges
                 pass
         
         created_edges = await _persist_edges(twin_id, valid_edges, node_map)
         
+        # 3. Update MemoryEvent with resolved IDs
+        if memory_event:
+            await update_memory_event(memory_event['id'], {
+                "nodes_created": [n['id'] for n in created_nodes],
+                "edges_created": [e['id'] for e in created_edges],
+                "node_count": len(created_nodes),
+                "edge_count": len(created_edges)
+            })
+        
         return {
             "nodes": created_nodes, 
             "edges": created_edges,
-            "confidence": updates.confidence
+            "confidence": updates.confidence,
+            "memory_event_id": memory_event['id'] if memory_event else None
         }
 
     except Exception as e:
         logger.error(f"Scribe Engine Error: {e}", exc_info=True)
-        # Log to stderr/stdout as well for visibility
         print(f"Scribe Engine Critical Failure: {e}")
+        
+        # Create failed MemoryEvent for audit trail
+        if tenant_id:
+            await create_memory_event(
+                twin_id=twin_id,
+                tenant_id=tenant_id,
+                event_type="auto_extract",
+                payload={"error": str(e)},
+                status="failed",
+                source_type="chat_turn",
+                source_id=conversation_id
+            )
+        
         return {"nodes": [], "edges": [], "error": str(e)}
+
 
 
 async def _persist_nodes(twin_id: str, nodes: List[NodeUpdate]) -> List[Dict[str, Any]]:

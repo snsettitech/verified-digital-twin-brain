@@ -27,7 +27,8 @@ def list_users(tenant_id: str) -> List[Dict[str, Any]]:
                 "email": user["email"],
                 "role": user["role"],
                 "invited_at": user.get("invited_at"),
-                "created_at": user.get("created_at")
+                "created_at": user.get("created_at"),
+                "last_active_at": user.get("last_active_at")
             })
         
         return users

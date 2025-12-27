@@ -1,9 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import Link from 'next/link';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useTwin } from '@/lib/context/TwinContext';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface DashboardStats {
     conversations: number;
@@ -28,9 +27,12 @@ interface TopQuestion {
 }
 
 export default function InsightsPage() {
+    const { activeTwin, isLoading: twinLoading } = useTwin();
+    const { get } = useAuthFetch();
+    const twinId = activeTwin?.id;
+
     const [timeRange, setTimeRange] = useState<'7d' | '30d' | '90d'>('30d');
     const [loading, setLoading] = useState(true);
-    const [twinId, setTwinId] = useState<string | null>(null);
 
     const [stats, setStats] = useState<DashboardStats>({
         conversations: 0,
@@ -46,95 +48,73 @@ export default function InsightsPage() {
     const [topQuestions, setTopQuestions] = useState<TopQuestion[]>([]);
 
     // Get days from time range
-    const getDays = () => {
+    const getDays = useCallback(() => {
         switch (timeRange) {
             case '7d': return 7;
             case '30d': return 30;
             case '90d': return 90;
             default: return 30;
         }
-    };
+    }, [timeRange]);
 
     // Fetch all data
+    const fetchData = useCallback(async () => {
+        if (!twinId) return;
+
+        setLoading(true);
+        const days = getDays();
+
+        // Fetch dashboard stats
+        try {
+            const statsResponse = await get(`/metrics/dashboard/${twinId}?days=${days}`);
+            if (statsResponse.ok) {
+                const data = await statsResponse.json();
+                setStats({
+                    conversations: data.conversations,
+                    messages: data.messages,
+                    userMessages: data.user_messages,
+                    assistantMessages: data.assistant_messages,
+                    avgConfidence: data.avg_confidence,
+                    escalationRate: data.escalation_rate,
+                    responseRate: data.response_rate
+                });
+            }
+        } catch (error) {
+            console.error('Failed to fetch stats:', error);
+        }
+
+        // Fetch daily metrics
+        try {
+            const dailyResponse = await get(`/metrics/daily/${twinId}?days=${Math.min(days, 30)}`);
+            if (dailyResponse.ok) {
+                const data = await dailyResponse.json();
+                setDailyData(data);
+            }
+        } catch (error) {
+            console.error('Failed to fetch daily metrics:', error);
+        }
+
+        // Fetch top questions
+        try {
+            const questionsResponse = await get(`/metrics/top-questions/${twinId}?limit=5`);
+            if (questionsResponse.ok) {
+                const data = await questionsResponse.json();
+                setTopQuestions(data);
+            }
+        } catch (error) {
+            console.error('Failed to fetch top questions:', error);
+        }
+
+        setLoading(false);
+    }, [twinId, getDays, get]);
+
     useEffect(() => {
-        const fetchData = async () => {
-            setLoading(true);
-
-            // Get active twin ID
-            let activeTwinId = localStorage.getItem('activeTwinId');
-
-            if (!activeTwinId) {
-                try {
-                    const twinsResponse = await fetch(`${API_BASE_URL}/twins`);
-                    if (twinsResponse.ok) {
-                        const twins = await twinsResponse.json();
-                        if (twins && twins.length > 0) {
-                            activeTwinId = twins[0].id;
-                            if (activeTwinId) {
-                                localStorage.setItem('activeTwinId', activeTwinId);
-                            }
-                        }
-                    }
-                } catch (error) {
-                    console.error('Failed to fetch twins:', error);
-                }
-            }
-
-            setTwinId(activeTwinId);
-
-            if (!activeTwinId) {
-                setLoading(false);
-                return;
-            }
-
-            const days = getDays();
-
-            // Fetch dashboard stats
-            try {
-                const statsResponse = await fetch(`${API_BASE_URL}/metrics/dashboard/${activeTwinId}?days=${days}`);
-                if (statsResponse.ok) {
-                    const data = await statsResponse.json();
-                    setStats({
-                        conversations: data.conversations,
-                        messages: data.messages,
-                        userMessages: data.user_messages,
-                        assistantMessages: data.assistant_messages,
-                        avgConfidence: data.avg_confidence,
-                        escalationRate: data.escalation_rate,
-                        responseRate: data.response_rate
-                    });
-                }
-            } catch (error) {
-                console.error('Failed to fetch stats:', error);
-            }
-
-            // Fetch daily metrics
-            try {
-                const dailyResponse = await fetch(`${API_BASE_URL}/metrics/daily/${activeTwinId}?days=${Math.min(days, 30)}`);
-                if (dailyResponse.ok) {
-                    const data = await dailyResponse.json();
-                    setDailyData(data);
-                }
-            } catch (error) {
-                console.error('Failed to fetch daily metrics:', error);
-            }
-
-            // Fetch top questions
-            try {
-                const questionsResponse = await fetch(`${API_BASE_URL}/metrics/top-questions/${activeTwinId}?limit=5`);
-                if (questionsResponse.ok) {
-                    const data = await questionsResponse.json();
-                    setTopQuestions(data);
-                }
-            } catch (error) {
-                console.error('Failed to fetch top questions:', error);
-            }
-
+        if (twinId) {
+            fetchData();
+        } else if (!twinLoading) {
             setLoading(false);
-        };
-
-        fetchData();
-    }, [timeRange]);
+        }
+    }, [twinId, twinLoading, fetchData]);
 
     const maxConversations = Math.max(...dailyData.map(d => d.conversations), 1);
 
@@ -146,7 +126,6 @@ export default function InsightsPage() {
 
     // Calculate confidence distribution from avg
     const getConfidenceDistribution = () => {
-        // This is an approximation based on avg confidence
         const avg = stats.avgConfidence;
         if (avg >= 85) {
             return [
@@ -175,7 +154,7 @@ export default function InsightsPage() {
         }
     };
 
-    if (loading) {
+    if (twinLoading || loading) {
         return (
             <div className="space-y-8">
                 <div className="animate-pulse">
@@ -185,6 +164,25 @@ export default function InsightsPage() {
                         <div className="h-32 bg-slate-200 rounded-2xl"></div>
                         <div className="h-32 bg-slate-200 rounded-2xl"></div>
                     </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (!twinId) {
+        return (
+            <div className="flex items-center justify-center h-96">
+                <div className="text-center max-w-md p-8">
+                    <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                        <svg className="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                        </svg>
+                    </div>
+                    <h2 className="text-2xl font-bold text-slate-900 mb-3">No Twin Found</h2>
+                    <p className="text-slate-500 mb-6">Create a digital twin first to view insights.</p>
+                    <a href="/dashboard/right-brain" className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+                        Create Your Twin
+                    </a>
                 </div>
             </div>
         );
@@ -214,7 +212,7 @@ export default function InsightsPage() {
                 </div>
             </div>
 
-            {/* Key Metrics - REAL DATA */}
+            {/* Key Metrics */}
             <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
                 {[
                     {
@@ -265,7 +263,7 @@ export default function InsightsPage() {
                 ))}
             </div>
 
-            {/* Activity Chart - REAL DATA */}
+            {/* Activity Chart */}
             <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
                 <h2 className="text-lg font-bold text-slate-900 mb-6">Daily Activity</h2>
                 {dailyData.length === 0 ? (
@@ -302,7 +300,7 @@ export default function InsightsPage() {
                 )}
             </div>
 
-            {/* Top Questions & Confidence Distribution - REAL DATA */}
+            {/* Top Questions & Confidence Distribution */}
             <div className="grid lg:grid-cols-2 gap-6">
                 {/* Top Questions */}
                 <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
@@ -361,7 +359,7 @@ export default function InsightsPage() {
                 </div>
             </div>
 
-            {/* Export - kept for utility */}
+            {/* Export */}
             <div className="flex items-center justify-between p-6 bg-slate-50 rounded-2xl border border-slate-200">
                 <div>
                     <h3 className="font-bold text-slate-900">Export Analytics</h3>

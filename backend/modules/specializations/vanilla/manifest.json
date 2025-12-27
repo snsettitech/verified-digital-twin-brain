@@ -1,0 +1,19 @@
+{
+    "id": "vanilla",
+    "display_name": "Digital Twin",
+    "description": "General-purpose digital twin for knowledge management and conversation",
+    "packs": [
+        "modules/specializations/vanilla/ontology/onboarding_base_pack.json"
+    ],
+    "prompts": {
+        "host": "modules/specializations/vanilla/prompts/host_prompt.txt"
+    },
+    "host_policy": "modules/specializations/vanilla/host_policy.json",
+    "ui_config": null,
+    "default_triggers": null,
+    "feature_flags": {
+        "graph_visualization": true,
+        "simple_chat": true,
+        "interview_mode": true
+    }
+}

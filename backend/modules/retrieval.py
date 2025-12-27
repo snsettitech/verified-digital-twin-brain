@@ -6,6 +6,18 @@ from modules.verified_qna import match_verified_qna
 from modules.observability import supabase
 from modules.access_groups import get_default_group
 
+# Langfuse v3 tracing
+try:
+    from langfuse import observe
+    import langfuse
+    _langfuse_available = True
+except ImportError:
+    _langfuse_available = False
+    def observe(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
 def get_embedding(text: str):
     """
     Synchronous embedding call for backward compatibility if needed.
@@ -117,6 +129,7 @@ def rrf_merge(results_list: List[List[Dict[str, Any]]], k: int = 60) -> List[Dic
         
     return final_results
 
+@observe(name="rag_retrieval")
 async def retrieve_context_with_verified_first(query: str, twin_id: str, group_id: Optional[str] = None, top_k: int = 5):
     """
     Retrieval pipeline with verified-first order: Check verified QnA → vectors → tools.
@@ -153,6 +166,7 @@ async def retrieve_context_with_verified_first(query: str, twin_id: str, group_i
     return await retrieve_context_vectors(query, twin_id, group_id=group_id, top_k=top_k)
 
 
+@observe(name="rag_vector_retrieval")
 async def retrieve_context_vectors(query: str, twin_id: str, group_id: Optional[str] = None, top_k: int = 5):
     """
     Optimized retrieval pipeline using HyDE, Query Expansion, and RRF (vector-only).
@@ -319,6 +333,22 @@ async def retrieve_context_vectors(query: str, twin_id: str, group_id: Optional[
     # Add verified_qna_match flag (False since we didn't find verified match)
     for c in final_contexts:
         c["verified_qna_match"] = False
+    
+    # Log RAG metrics to Langfuse
+    if _langfuse_available and final_contexts:
+        try:
+            langfuse.update_current_observation(
+                metadata={
+                    "doc_ids": [c.get("source_id", "unknown")[:50] for c in final_contexts],
+                    "similarity_scores": [round(c.get("score", 0.0), 3) for c in final_contexts],
+                    "chunk_lengths": [len(c.get("text", "")) for c in final_contexts],
+                    "reranked": cohere_client is not None,
+                    "top_k": top_k,
+                    "total_retrieved": len(final_contexts),
+                }
+            )
+        except Exception as e:
+            print(f"Langfuse observation update failed: {e}")
     
     return final_contexts
 

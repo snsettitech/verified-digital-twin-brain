@@ -1,8 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Card, CardHeader, CardContent, Modal, useToast } from '@/components/ui';
+import { useTwin } from '@/lib/context/TwinContext';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface Connector {
     id: string;
@@ -25,6 +27,8 @@ const CONNECTOR_TYPES = [
 
 export default function ConnectorsPage() {
     const { showToast } = useToast();
+    const { activeTwin, isLoading: twinLoading } = useTwin();
+    const { get, post, del } = useAuthFetch();
     const [connectors, setConnectors] = useState<Connector[]>([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
@@ -32,37 +36,35 @@ export default function ConnectorsPage() {
     const [connectorName, setConnectorName] = useState('');
     const [testingId, setTestingId] = useState<string | null>(null);
 
-    const twinId = "eeeed554-9180-4229-a9af-0f8dd2c69e9b";
+    const twinId = activeTwin?.id;
 
-    const fetchConnectors = async () => {
+    const fetchConnectors = useCallback(async () => {
+        if (!twinId) return;
         try {
-            const res = await fetch(`http://localhost:8000/twins/${twinId}/connectors`, {
-                headers: { 'Authorization': 'Bearer development_token' }
-            });
+            const res = await get(`/twins/${twinId}/connectors`);
             if (res.ok) setConnectors(await res.json());
         } catch (err) {
             console.error('Fetch error:', err);
         } finally {
             setLoading(false);
         }
-    };
+    }, [twinId, get]);
 
-    useEffect(() => { fetchConnectors(); }, []);
+    useEffect(() => {
+        if (twinId) {
+            fetchConnectors();
+        } else if (!twinLoading) {
+            setLoading(false);
+        }
+    }, [twinId, twinLoading, fetchConnectors]);
 
     const handleCreate = async () => {
-        if (!selectedType || !connectorName) return;
+        if (!selectedType || !connectorName || !twinId) return;
         try {
-            const res = await fetch(`http://localhost:8000/twins/${twinId}/connectors`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': 'Bearer development_token',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    connector_type: selectedType,
-                    name: connectorName,
-                    config: {}
-                })
+            const res = await post(`/twins/${twinId}/connectors`, {
+                connector_type: selectedType,
+                name: connectorName,
+                config: {}
             });
             if (res.ok) {
                 showToast('Connector added successfully', 'success');
@@ -77,12 +79,10 @@ export default function ConnectorsPage() {
     };
 
     const handleTest = async (id: string) => {
+        if (!twinId) return;
         setTestingId(id);
         try {
-            const res = await fetch(`http://localhost:8000/twins/${twinId}/connectors/${id}/test`, {
-                method: 'POST',
-                headers: { 'Authorization': 'Bearer development_token' }
-            });
+            const res = await post(`/twins/${twinId}/connectors/${id}/test`, {});
             const data = await res.json();
             if (data.success) {
                 showToast('Connection verified successfully', 'success');
@@ -98,12 +98,10 @@ export default function ConnectorsPage() {
     };
 
     const handleDelete = async (id: string) => {
+        if (!twinId) return;
         if (!confirm('Are you sure you want to remove this connector?')) return;
         try {
-            await fetch(`http://localhost:8000/twins/${twinId}/connectors/${id}`, {
-                method: 'DELETE',
-                headers: { 'Authorization': 'Bearer development_token' }
-            });
+            await del(`/twins/${twinId}/connectors/${id}`);
             showToast('Connector removed', 'success');
             fetchConnectors();
         } catch (err) {
@@ -114,6 +112,33 @@ export default function ConnectorsPage() {
     const getConnectorInfo = (type: string) => {
         return CONNECTOR_TYPES.find(c => c.value === type) || { icon: '🔌', label: type, description: '' };
     };
+
+    if (twinLoading) {
+        return (
+            <div className="flex justify-center p-20">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
+            </div>
+        );
+    }
+
+    if (!twinId) {
+        return (
+            <div className="flex items-center justify-center h-96">
+                <div className="text-center max-w-md p-8">
+                    <div className="w-16 h-16 bg-indigo-900/50 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                        <svg className="w-8 h-8 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
+                        </svg>
+                    </div>
+                    <h2 className="text-2xl font-bold text-white mb-3">No Twin Found</h2>
+                    <p className="text-slate-400 mb-6">Create a digital twin first to configure connectors.</p>
+                    <a href="/dashboard/right-brain" className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+                        Create Your Twin
+                    </a>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="max-w-4xl mx-auto space-y-8 pb-20">

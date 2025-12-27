@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { getSupabaseClient } from '@/lib/supabase/client';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -26,7 +27,7 @@ export default function ChatWidget({
   apiBaseUrl,
   theme
 }: ChatWidgetProps) {
-  const baseUrl = apiBaseUrl || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const baseUrl = apiBaseUrl || process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
   const primaryColor = theme?.primaryColor || '#2563eb';
   const headerColor = theme?.headerColor || primaryColor;
   const headerTextColor = theme?.headerTextColor || '#ffffff';
@@ -52,6 +53,18 @@ export default function ChatWidget({
     }
   }, [messages, loading, isOpen]);
 
+  // Get auth token for internal dashboard use (when no API key is provided)
+  const getAuthToken = useCallback(async (): Promise<string | null> => {
+    try {
+      const supabase = getSupabaseClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      return session?.access_token || null;
+    } catch (error) {
+      console.error('Failed to get auth token:', error);
+      return null;
+    }
+  }, []);
+
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
 
@@ -68,7 +81,7 @@ export default function ChatWidget({
         'Content-Type': 'application/json',
       };
 
-      // Use X-Twin-API-Key header if API key provided, otherwise use Authorization
+      // Use X-Twin-API-Key header if API key provided, otherwise use Supabase session
       if (apiKey) {
         headers['X-Twin-API-Key'] = apiKey;
         // Add Origin header for domain validation
@@ -76,7 +89,11 @@ export default function ChatWidget({
           headers['Origin'] = window.location.origin;
         }
       } else {
-        headers['Authorization'] = 'Bearer development_token';
+        // Get Supabase session token for internal dashboard use
+        const token = await getAuthToken();
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
       }
 
       const response = await fetch(`${baseUrl}/chat/${twinId}`, {
@@ -189,8 +206,8 @@ export default function ChatWidget({
               <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div
                   className={`max-w-[85%] p-3 rounded-2xl text-sm shadow-sm ${msg.role === 'user'
-                      ? 'text-white rounded-tr-none'
-                      : 'bg-white text-slate-800 border border-slate-100 rounded-tl-none'
+                    ? 'text-white rounded-tr-none'
+                    : 'bg-white text-slate-800 border border-slate-100 rounded-tl-none'
                     }`}
                   style={msg.role === 'user' ? { backgroundColor: primaryColor } : {}}
                 >

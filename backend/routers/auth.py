@@ -40,10 +40,13 @@ async def sync_user(user=Depends(get_current_user)):
     Called after OAuth/magic link login to ensure user exists in our DB.
     Creates user record and default tenant if first login.
     """
+    print(f"[SYNC DEBUG] Starting sync for user_id: {user.get('user_id')}")
     user_id = user.get("user_id")
     email = user.get("email", "")
+    print(f"[SYNC DEBUG] email: {email}")
     
     # Check if user already exists in our users table
+    print(f"[SYNC DEBUG] Checking if user exists...")
     existing = supabase.table("users").select("*, tenants(id, name)").eq("id", user_id).execute()
     
     if existing.data and len(existing.data) > 0:
@@ -54,8 +57,12 @@ async def sync_user(user=Depends(get_current_user)):
             tenant_id = user_data["tenants"].get("id") if isinstance(user_data["tenants"], dict) else None
         
         # Check if they have any twins (onboarding complete if yes)
-        twins_check = supabase.table("twins").select("id").eq("owner_id", user_id).limit(1).execute()
-        has_twins = bool(twins_check.data)
+        # Use tenant_id from user's tenant to find twins
+        if tenant_id:
+            twins_check = supabase.table("twins").select("id").eq("tenant_id", tenant_id).limit(1).execute()
+            has_twins = bool(twins_check.data)
+        else:
+            has_twins = False
         
         return SyncUserResponse(
             status="exists",
@@ -72,24 +79,35 @@ async def sync_user(user=Depends(get_current_user)):
         )
     
     # First login - create user record
+    print(f"[SYNC DEBUG] User doesn't exist, creating...")
     # Get additional metadata from the auth token
     full_name = user.get("name") or user.get("user_metadata", {}).get("full_name") or email.split("@")[0]
     avatar_url = user.get("avatar_url") or user.get("user_metadata", {}).get("avatar_url")
+    print(f"[SYNC DEBUG] full_name: {full_name}, avatar_url: {avatar_url}")
     
     # Create user record
-    user_insert = supabase.table("users").insert({
-        "id": user_id,
-        "email": email,
-        "full_name": full_name,
-        "avatar_url": avatar_url,
-        "created_at": datetime.utcnow().isoformat()
-    }).execute()
+    print(f"[SYNC DEBUG] Inserting into users table...")
+    try:
+        # Minimal insert - only id and email (the columns that MUST exist)
+        user_insert = supabase.table("users").insert({
+            "id": user_id,
+            "email": email
+        }).execute()
+        print(f"[SYNC DEBUG] User created successfully with minimal schema")
+    except Exception as e:
+        print(f"[SYNC DEBUG] ERROR creating user: {e}")
+        raise
     
     # Create default tenant for this user
-    tenant_insert = supabase.table("tenants").insert({
-        "owner_id": user_id,
-        "name": f"{full_name}'s Workspace"
-    }).execute()
+    print(f"[SYNC DEBUG] Creating tenant...")
+    try:
+        tenant_insert = supabase.table("tenants").insert({
+            "owner_id": user_id,
+            "name": f"{full_name}'s Workspace"
+        }).execute()
+    except Exception as e:
+        print(f"[SYNC DEBUG] ERROR creating tenant: {e}")
+        raise
     
     tenant_id = tenant_insert.data[0]["id"] if tenant_insert.data else None
     
@@ -123,9 +141,12 @@ async def get_current_user_profile(user=Depends(get_current_user)):
     if user_data.get("tenants"):
         tenant_id = user_data["tenants"].get("id") if isinstance(user_data["tenants"], dict) else None
     
-    # Check onboarding status
-    twins_check = supabase.table("twins").select("id").eq("owner_id", user_id).limit(1).execute()
-    has_twins = bool(twins_check.data)
+    # Check onboarding status - use tenant_id to find twins
+    if tenant_id:
+        twins_check = supabase.table("twins").select("id").eq("tenant_id", tenant_id).limit(1).execute()
+        has_twins = bool(twins_check.data)
+    else:
+        has_twins = False
     
     return UserProfile(
         id=user_id,

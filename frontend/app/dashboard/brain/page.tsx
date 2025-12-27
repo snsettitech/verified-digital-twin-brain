@@ -3,6 +3,10 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useSpecialization } from '@/contexts/SpecializationContext';
+import { useTwin } from '@/lib/context/TwinContext';
+import { getSupabaseClient } from '@/lib/supabase/client';
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
 interface Node {
     id: string;
@@ -30,6 +34,8 @@ interface GraphData {
 
 export default function BrainGraphPage() {
     const { config } = useSpecialization();
+    const { activeTwin, isLoading: twinLoading } = useTwin();
+    const supabase = getSupabaseClient();
     const [data, setData] = useState<GraphData | null>(null);
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState<'visual' | 'data'>('data');
@@ -41,19 +47,25 @@ export default function BrainGraphPage() {
     const [approving, setApproving] = useState(false);
     const [showVersions, setShowVersions] = useState(false);
 
-    // TODO: Use real twin ID context
-    const twinId = 'eeeed554-9180-4229-a9af-0f8dd2c69e9b';
+    // Use active twin from context
+    const twinId = activeTwin?.id;
 
     useEffect(() => {
-        fetchGraph();
-        fetchVersions();
+        if (twinId) {
+            fetchGraph();
+            fetchVersions();
+        }
     }, [twinId]);
 
     const fetchGraph = async () => {
         try {
             setLoading(true);
-            const res = await fetch(`http://localhost:8000/twins/${twinId}/graph?limit=100`, {
-                headers: { 'Authorization': 'Bearer development_token' }
+            const { data: { session } } = await supabase.auth.getSession();
+            const token = session?.access_token;
+            if (!token) return;
+
+            const res = await fetch(`${API_BASE_URL}/twins/${twinId}/graph?limit=100`, {
+                headers: { 'Authorization': `Bearer ${token}` }
             });
             if (res.ok) {
                 const json = await res.json();
@@ -68,8 +80,12 @@ export default function BrainGraphPage() {
 
     const fetchVersions = async () => {
         try {
-            const res = await fetch(`http://localhost:8000/cognitive/profiles/${twinId}/versions`, {
-                headers: { 'Authorization': 'Bearer development_token' }
+            const { data: { session } } = await supabase.auth.getSession();
+            const token = session?.access_token;
+            if (!token) return;
+
+            const res = await fetch(`${API_BASE_URL}/cognitive/profiles/${twinId}/versions`, {
+                headers: { 'Authorization': `Bearer ${token}` }
             });
             if (res.ok) {
                 const json = await res.json();
@@ -87,10 +103,17 @@ export default function BrainGraphPage() {
         if (approving) return;
         setApproving(true);
         try {
-            const res = await fetch(`http://localhost:8000/cognitive/profiles/${twinId}/approve`, {
+            const { data: { session } } = await supabase.auth.getSession();
+            const token = session?.access_token;
+            if (!token) {
+                alert('Not authenticated');
+                return;
+            }
+
+            const res = await fetch(`${API_BASE_URL}/cognitive/profiles/${twinId}/approve`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': 'Bearer development_token',
+                    'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({ notes: 'Approved via Brain Explorer' })
@@ -118,6 +141,46 @@ export default function BrainGraphPage() {
         acc[t].push(node);
         return acc;
     }, {} as Record<string, Node[]>) || {};
+
+    // Loading state
+    if (twinLoading) {
+        return (
+            <div className="flex items-center justify-center h-[calc(100vh-theme(spacing.16))]">
+                <div className="text-center">
+                    <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-slate-500">Loading your twin...</p>
+                </div>
+            </div>
+        );
+    }
+
+    // No twin state
+    if (!twinId) {
+        return (
+            <div className="flex items-center justify-center h-[calc(100vh-theme(spacing.16))] bg-slate-50">
+                <div className="text-center max-w-md p-8">
+                    <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                        <svg className="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                        </svg>
+                    </div>
+                    <h2 className="text-2xl font-bold text-slate-900 mb-3">No Twin Found</h2>
+                    <p className="text-slate-500 mb-6">
+                        Create a digital twin first to explore your brain graph.
+                    </p>
+                    <Link
+                        href="/dashboard/right-brain"
+                        className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors"
+                    >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
+                        </svg>
+                        Create Your Twin
+                    </Link>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="flex flex-col h-[calc(100vh-theme(spacing.16))] bg-white">
@@ -147,10 +210,10 @@ export default function BrainGraphPage() {
                         onClick={handleApprove}
                         disabled={approving || !data?.stats.node_count}
                         className={`px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 transition-all ${approving
-                                ? 'bg-gray-200 text-gray-400 cursor-wait'
-                                : data?.stats.node_count
-                                    ? 'bg-green-600 text-white hover:bg-green-700 shadow-lg shadow-green-200'
-                                    : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                            ? 'bg-gray-200 text-gray-400 cursor-wait'
+                            : data?.stats.node_count
+                                ? 'bg-green-600 text-white hover:bg-green-700 shadow-lg shadow-green-200'
+                                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                             }`}
                     >
                         {approving ? (

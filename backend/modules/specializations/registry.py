@@ -81,16 +81,13 @@ def _ensure_registered() -> None:
     
     # Import to trigger registration
     from .vanilla import VanillaSpecialization
-    from .vc import VCSpecialization
     
     register_specialization("vanilla", VanillaSpecialization)
-    register_specialization("vc", VCSpecialization)
 
 
 # Tier configuration for specializations
 _TIER_CONFIG = {
     "vanilla": {"tier": "free", "icon": "🧠"},
-    "vc": {"tier": "free", "icon": "💼"},  # Temporarily free for development
     "legal": {"tier": "premium", "icon": "⚖️", "coming_soon": True},
     "medical": {"tier": "premium", "icon": "🏥", "coming_soon": True},
 }

@@ -1,7 +1,9 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { useTwin } from '@/lib/context/TwinContext';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface Source {
   id: string;
@@ -15,25 +17,25 @@ interface Source {
   chunk_count?: number;
 }
 
-const twinId = "eeeed554-9180-4229-a9af-0f8dd2c69e9b"; // Fixed for dev
-
 export default function StagingPage() {
   const router = useRouter();
+  const { activeTwin, isLoading: twinLoading } = useTwin();
+  const { get, post } = useAuthFetch();
   const [sources, setSources] = useState<Source[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>('all');
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
-  const fetchSources = async () => {
+  const twinId = activeTwin?.id;
+
+  const fetchSources = useCallback(async () => {
+    if (!twinId) return;
     try {
-      const response = await fetch(`http://localhost:8000/sources/${twinId}`, {
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const response = await get(`/sources/${twinId}`);
       if (response.ok) {
         const data = await response.json();
-        // Filter to show only staged sources
-        const stagedSources = data.filter((s: Source) => 
+        const stagedSources = data.filter((s: Source) =>
           s.staging_status && ['staged', 'approved', 'rejected', 'training'].includes(s.staging_status)
         );
         setSources(stagedSources);
@@ -43,14 +45,17 @@ export default function StagingPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [twinId, get]);
 
   useEffect(() => {
-    fetchSources();
-    // Poll for updates every 5 seconds
-    const interval = setInterval(fetchSources, 5000);
-    return () => clearInterval(interval);
-  }, []);
+    if (twinId) {
+      fetchSources();
+      const interval = setInterval(fetchSources, 5000);
+      return () => clearInterval(interval);
+    } else if (!twinLoading) {
+      setLoading(false);
+    }
+  }, [twinId, twinLoading, fetchSources]);
 
   const filteredSources = sources.filter(s => {
     if (filter === 'all') return true;
@@ -59,13 +64,7 @@ export default function StagingPage() {
 
   const handleApprove = async (sourceId: string) => {
     try {
-      const response = await fetch(`http://localhost:8000/sources/${sourceId}/approve`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': 'Bearer development_token',
-          'Content-Type': 'application/json'
-        }
-      });
+      const response = await post(`/sources/${sourceId}/approve`);
       if (response.ok) {
         fetchSources();
       } else {
@@ -82,14 +81,7 @@ export default function StagingPage() {
     if (!reason) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/sources/${sourceId}/reject`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': 'Bearer development_token',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ reason })
-      });
+      const response = await post(`/sources/${sourceId}/reject`, { reason });
       if (response.ok) {
         fetchSources();
       } else {
@@ -105,14 +97,7 @@ export default function StagingPage() {
     if (selectedSources.size === 0) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/sources/bulk-approve`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': 'Bearer development_token',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ source_ids: Array.from(selectedSources) })
-      });
+      const response = await post(`/sources/bulk-approve`, { source_ids: Array.from(selectedSources) });
       if (response.ok) {
         setSelectedSources(new Set());
         fetchSources();
@@ -153,6 +138,33 @@ export default function StagingPage() {
     );
   };
 
+  if (twinLoading) {
+    return (
+      <div className="flex justify-center p-20">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
+  if (!twinId) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center max-w-md p-8">
+          <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <svg className="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-slate-900 mb-3">No Twin Found</h2>
+          <p className="text-slate-500 mb-6">Create a digital twin first to access content staging.</p>
+          <a href="/dashboard/right-brain" className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+            Create Your Twin
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-6xl mx-auto space-y-10 pb-20">
       <div className="flex items-center justify-between">
@@ -176,11 +188,10 @@ export default function StagingPage() {
           <button
             key={f}
             onClick={() => setFilter(f)}
-            className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${
-              filter === f
+            className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${filter === f
                 ? 'bg-indigo-600 text-white'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-            }`}
+              }`}
           >
             {f.charAt(0).toUpperCase() + f.slice(1)}
           </button>
@@ -301,4 +312,3 @@ export default function StagingPage() {
     </div>
   );
 }
-

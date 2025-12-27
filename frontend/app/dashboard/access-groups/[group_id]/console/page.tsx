@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useAuthFetch, getAuthToken } from '@/lib/hooks/useAuthFetch';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -11,6 +12,7 @@ interface Message {
 export default function GroupConsolePage() {
   const params = useParams();
   const router = useRouter();
+  const { get } = useAuthFetch();
   const groupId = params.group_id as string;
 
   const [group, setGroup] = useState<Record<string, any> | null>(null);
@@ -19,11 +21,11 @@ export default function GroupConsolePage() {
   const [loading, setLoading] = useState(false);
   const [twinId, setTwinId] = useState<string>('');
 
+  const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
   const fetchGroupInfo = useCallback(async () => {
     try {
-      const response = await fetch(`http://localhost:8000/access-groups/${groupId}`, {
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const response = await get(`/access-groups/${groupId}`);
       if (response.ok) {
         const data = await response.json();
         setGroup(data);
@@ -32,7 +34,7 @@ export default function GroupConsolePage() {
     } catch (err) {
       console.error('Error fetching group info:', err);
     }
-  }, [groupId]);
+  }, [groupId, get]);
 
   useEffect(() => {
     fetchGroupInfo();
@@ -47,12 +49,17 @@ export default function GroupConsolePage() {
     setLoading(true);
 
     try {
-      const response = await fetch(`http://localhost:8000/chat/${twinId}`, {
+      const token = await getAuthToken();
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/chat/${twinId}`, {
         method: 'POST',
-        headers: {
-          'Authorization': 'Bearer development_token',
-          'Content-Type': 'application/json'
-        },
+        headers,
         body: JSON.stringify({
           query: inputMessage,
           group_id: groupId

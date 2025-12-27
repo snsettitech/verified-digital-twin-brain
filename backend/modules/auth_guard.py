@@ -105,12 +105,19 @@ def get_current_user(
         
         token = parts[1]
         
+        # DEBUG: Print token info
+        print(f"[JWT DEBUG] Token length: {len(token)}")
+        print(f"[JWT DEBUG] Secret length: {len(SUPABASE_JWT_SECRET)}")
+        print(f"[JWT DEBUG] Secret first 10: {SUPABASE_JWT_SECRET[:10]}...")
+        
         # Verify and decode JWT signature (this validates expiry too)
+        # Supabase tokens have aud="authenticated"
         payload = jwt.decode(
             token, 
             SUPABASE_JWT_SECRET, 
             algorithms=[ALGORITHM],
-            options={"verify_exp": True}  # Explicitly verify expiry
+            options={"verify_exp": True},
+            audience="authenticated"  # Supabase sets this
         )
         
         # Supabase JWT has 'sub' as user_id
@@ -133,6 +140,16 @@ def get_current_user(
         except Exception as e:
             # User might not exist yet (first login) - sync-user will create them
             print(f"Tenant lookup failed (expected for new users): {e}")
+
+        # Update user activity timestamp (best effort)
+        try:
+            from datetime import datetime
+            supabase_client.table("users").update({
+                "last_active_at": datetime.utcnow().isoformat()
+            }).eq("id", user_id).execute()
+        except Exception:
+            # Ignore errors (e.g. column missing, db down) to prevent blocking auth
+            pass
         
         return {
             "user_id": user_id,
@@ -145,8 +162,10 @@ def get_current_user(
         }
         
     except jwt.ExpiredSignatureError:
+        print("[JWT DEBUG] ERROR: Token has EXPIRED")
         raise HTTPException(status_code=401, detail="Token has expired")
     except JWTError as e:
+        print(f"[JWT DEBUG] ERROR: {str(e)}")
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
 
 def verify_owner(user=Depends(get_current_user)):
@@ -172,22 +191,41 @@ def verify_twin_access(twin_id: str, user: dict) -> bool:
             return True
         raise HTTPException(status_code=403, detail="API key not authorized for this twin")
     
-    # Authenticated users: verify twin belongs to them
+    # Authenticated users: verify twin belongs to their tenant
     user_id = user.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not authenticated")
     
-    # Check if user owns the twin directly
+    # Get user's tenant_id (may already be in user dict from auth)
+    user_tenant_id = user.get("tenant_id")
+    
+    # If not in user dict, look it up from database
+    if not user_tenant_id:
+        try:
+            user_lookup = supabase.table("users").select("tenant_id").eq("id", user_id).single().execute()
+            if user_lookup.data:
+                user_tenant_id = user_lookup.data.get("tenant_id")
+        except Exception as e:
+            print(f"[verify_twin_access] Error looking up user tenant: {e}")
+    
+    if not user_tenant_id:
+        raise HTTPException(status_code=403, detail="User has no tenant association")
+    
+    # Check if twin belongs to user's tenant
     try:
-        twin_check = supabase.table("twins").select("id, owner_id").eq("id", twin_id).single().execute()
+        twin_check = supabase.table("twins").select("id, tenant_id").eq("id", twin_id).single().execute()
         if not twin_check.data:
             raise HTTPException(status_code=404, detail="Twin not found")
         
-        if twin_check.data.get("owner_id") == user_id:
+        twin_tenant_id = twin_check.data.get("tenant_id")
+        if twin_tenant_id == user_tenant_id:
             return True
+            
+        print(f"[verify_twin_access] Access denied: user tenant {user_tenant_id} != twin tenant {twin_tenant_id}")
     except HTTPException:
         raise
-    except Exception:
-        pass  # Fall through to access denied
+    except Exception as e:
+        print(f"[verify_twin_access] Error checking twin access: {e}")
     
     raise HTTPException(status_code=403, detail="You do not have access to this twin")
+

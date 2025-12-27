@@ -17,9 +17,23 @@ from datetime import datetime
 import json
 import asyncio
 
+# Langfuse v3 tracing
+try:
+    from langfuse import observe, get_client
+    _langfuse_available = True
+    _langfuse_client = get_client()
+except ImportError:
+    _langfuse_available = False
+    _langfuse_client = None
+    def observe(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
 router = APIRouter(tags=["chat"])
 
 @router.post("/chat/{twin_id}")
+@observe(name="chat_request")
 async def chat(twin_id: str, request: ChatRequest, user=Depends(get_current_user)):
     # P0: Verify user has access to this twin
     verify_twin_access(twin_id, user)
@@ -27,6 +41,26 @@ async def chat(twin_id: str, request: ChatRequest, user=Depends(get_current_user
     query = request.query
     conversation_id = request.conversation_id
     group_id = request.group_id
+    
+    # Update Langfuse trace with session and user info (v3 pattern)
+    if _langfuse_available and _langfuse_client:
+        try:
+            import os
+            release = os.getenv("LANGFUSE_RELEASE", "dev")
+            # Get current observation and call update_trace on it
+            current_obs = _langfuse_client.get_current_observation()
+            if current_obs and hasattr(current_obs, 'update_trace'):
+                current_obs.update_trace(
+                    session_id=conversation_id,
+                    user_id=twin_id,
+                    metadata={
+                        "group_id": group_id,
+                        "query_length": len(query) if query else 0,
+                        "release": release,
+                    }
+                )
+        except Exception as e:
+            print(f"Langfuse trace update failed: {e}")
     
     # Determine user's group
     try:
@@ -143,11 +177,15 @@ async def chat(twin_id: str, request: ChatRequest, user=Depends(get_current_user
             # 6. Trigger Scribe (Fire-and-forget for learning)
             from modules._core.scribe_engine import process_interaction
             if full_response:
+                # Get tenant_id from user for MemoryEvent audit trail
+                tenant_id = user.get("tenant_id") if user else None
                 asyncio.create_task(process_interaction(
                     twin_id=twin_id,
                     user_message=query,
                     assistant_message=full_response,
-                    history=raw_history
+                    history=raw_history,
+                    tenant_id=tenant_id,
+                    conversation_id=conversation_id
                 ))
 
         except Exception as e:

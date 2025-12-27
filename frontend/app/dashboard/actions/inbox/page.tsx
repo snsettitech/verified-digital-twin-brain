@@ -1,8 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Card, CardHeader, CardContent, Modal, Toggle, useToast } from '@/components/ui';
+import { useTwin } from '@/lib/context/TwinContext';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface ActionDraft {
     id: string;
@@ -26,6 +28,8 @@ interface ActionDraft {
 
 export default function InboxPage() {
     const { showToast } = useToast();
+    const { activeTwin, isLoading: twinLoading } = useTwin();
+    const { get, post } = useAuthFetch();
     const [drafts, setDrafts] = useState<ActionDraft[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedDraft, setSelectedDraft] = useState<ActionDraft | null>(null);
@@ -34,39 +38,37 @@ export default function InboxPage() {
     const [saveAsVerified, setSaveAsVerified] = useState(false);
     const [approvalNote, setApprovalNote] = useState('');
 
-    const twinId = "eeeed554-9180-4229-a9af-0f8dd2c69e9b";
+    const twinId = activeTwin?.id;
 
-    const fetchDrafts = async () => {
+    const fetchDrafts = useCallback(async () => {
+        if (!twinId) return;
         try {
-            const res = await fetch(`http://localhost:8000/twins/${twinId}/action-drafts`, {
-                headers: { 'Authorization': 'Bearer development_token' }
-            });
+            const res = await get(`/twins/${twinId}/action-drafts`);
             if (res.ok) setDrafts(await res.json());
         } catch (err) {
             console.error('Fetch error:', err);
         } finally {
             setLoading(false);
         }
-    };
+    }, [twinId, get]);
 
-    useEffect(() => { fetchDrafts(); }, []);
+    useEffect(() => {
+        if (twinId) {
+            fetchDrafts();
+        } else if (!twinLoading) {
+            setLoading(false);
+        }
+    }, [twinId, twinLoading, fetchDrafts]);
 
     const handleRespond = async (id: string) => {
-        if (!responseMessage.trim()) {
+        if (!twinId || !responseMessage.trim()) {
             showToast('Please enter a response message', 'error');
             return;
         }
         try {
-            const res = await fetch(`http://localhost:8000/twins/${twinId}/action-drafts/${id}/respond`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': 'Bearer development_token',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    response_message: responseMessage,
-                    save_as_verified: saveAsVerified
-                })
+            const res = await post(`/twins/${twinId}/action-drafts/${id}/respond`, {
+                response_message: responseMessage,
+                save_as_verified: saveAsVerified
             });
             if (res.ok) {
                 const data = await res.json();
@@ -82,15 +84,9 @@ export default function InboxPage() {
     };
 
     const handleApprove = async (id: string) => {
+        if (!twinId) return;
         try {
-            const res = await fetch(`http://localhost:8000/twins/${twinId}/action-drafts/${id}/approve`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': 'Bearer development_token',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ approval_note: approvalNote })
-            });
+            const res = await post(`/twins/${twinId}/action-drafts/${id}/approve`, { approval_note: approvalNote });
             if (res.ok) {
                 showToast('Action approved and executed', 'success');
                 setSelectedDraft(null);
@@ -102,15 +98,9 @@ export default function InboxPage() {
     };
 
     const handleReject = async (id: string) => {
+        if (!twinId) return;
         try {
-            const res = await fetch(`http://localhost:8000/twins/${twinId}/action-drafts/${id}/reject`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': 'Bearer development_token',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ rejection_note: approvalNote })
-            });
+            const res = await post(`/twins/${twinId}/action-drafts/${id}/reject`, { rejection_note: approvalNote });
             if (res.ok) {
                 showToast('Action rejected', 'success');
                 setSelectedDraft(null);
@@ -140,6 +130,33 @@ export default function InboxPage() {
         if (hours > 24) return `${Math.floor(hours / 24)}d remaining`;
         return `${hours}h remaining`;
     };
+
+    if (twinLoading) {
+        return (
+            <div className="flex justify-center p-20">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
+            </div>
+        );
+    }
+
+    if (!twinId) {
+        return (
+            <div className="flex items-center justify-center h-96">
+                <div className="text-center max-w-md p-8">
+                    <div className="w-16 h-16 bg-indigo-900/50 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                        <svg className="w-8 h-8 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+                        </svg>
+                    </div>
+                    <h2 className="text-2xl font-bold text-white mb-3">No Twin Found</h2>
+                    <p className="text-slate-400 mb-6">Create a digital twin first to access the approval inbox.</p>
+                    <a href="/dashboard/right-brain" className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+                        Create Your Twin
+                    </a>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="max-w-4xl mx-auto space-y-8 pb-20">
@@ -238,8 +255,8 @@ export default function InboxPage() {
                             <button
                                 onClick={() => setActiveTab('respond')}
                                 className={`flex-1 py-2 px-4 rounded-lg text-sm font-bold transition-all ${activeTab === 'respond'
-                                        ? 'bg-indigo-600 text-white'
-                                        : 'text-slate-400 hover:text-white'
+                                    ? 'bg-indigo-600 text-white'
+                                    : 'text-slate-400 hover:text-white'
                                     }`}
                             >
                                 💬 Respond
@@ -247,8 +264,8 @@ export default function InboxPage() {
                             <button
                                 onClick={() => setActiveTab('approve')}
                                 className={`flex-1 py-2 px-4 rounded-lg text-sm font-bold transition-all ${activeTab === 'approve'
-                                        ? 'bg-emerald-600 text-white'
-                                        : 'text-slate-400 hover:text-white'
+                                    ? 'bg-emerald-600 text-white'
+                                    : 'text-slate-400 hover:text-white'
                                     }`}
                             >
                                 ✓ Approve
@@ -256,8 +273,8 @@ export default function InboxPage() {
                             <button
                                 onClick={() => setActiveTab('reject')}
                                 className={`flex-1 py-2 px-4 rounded-lg text-sm font-bold transition-all ${activeTab === 'reject'
-                                        ? 'bg-rose-600 text-white'
-                                        : 'text-slate-400 hover:text-white'
+                                    ? 'bg-rose-600 text-white'
+                                    : 'text-slate-400 hover:text-white'
                                     }`}
                             >
                                 ✕ Reject

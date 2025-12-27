@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface GroupMember {
   id: string;
@@ -22,8 +23,9 @@ interface User {
 export default function GroupMembersPage() {
   const params = useParams();
   const router = useRouter();
+  const { get, post, del } = useAuthFetch();
   const groupId = params.group_id as string;
-  
+
   const [members, setMembers] = useState<GroupMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -31,16 +33,9 @@ export default function GroupMembersPage() {
   const [selectedUserId, setSelectedUserId] = useState('');
   const [adding, setAdding] = useState(false);
 
-  useEffect(() => {
-    fetchMembers();
-    fetchUsers();
-  }, [groupId]);
-
-  const fetchMembers = async () => {
+  const fetchMembers = useCallback(async () => {
     try {
-      const response = await fetch(`http://localhost:8000/access-groups/${groupId}/members`, {
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const response = await get(`/access-groups/${groupId}/members`);
       if (response.ok) {
         const data = await response.json();
         setMembers(data);
@@ -50,13 +45,11 @@ export default function GroupMembersPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [groupId, get]);
 
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     try {
-      const response = await fetch('http://localhost:8000/users', {
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const response = await get('/users');
       if (response.ok) {
         const data = await response.json();
         setUsers(data);
@@ -64,35 +57,31 @@ export default function GroupMembersPage() {
     } catch (error) {
       console.error('Error fetching users:', error);
     }
-  };
+  }, [get]);
+
+  useEffect(() => {
+    fetchMembers();
+    fetchUsers();
+  }, [fetchMembers, fetchUsers]);
 
   const handleAddMember = async () => {
     if (!selectedUserId) return;
-    
+
     setAdding(true);
     try {
       // First, we need to get the twin_id from the group
-      const groupResponse = await fetch(`http://localhost:8000/access-groups/${groupId}`, {
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
-      
+      const groupResponse = await get(`/access-groups/${groupId}`);
+
       if (!groupResponse.ok) {
         throw new Error('Failed to fetch group');
       }
-      
+
       const group = await groupResponse.json();
       const twinId = group.twin_id;
 
-      const response = await fetch(`http://localhost:8000/twins/${twinId}/group-memberships`, {
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer development_token',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          user_id: selectedUserId,
-          group_id: groupId
-        })
+      const response = await post(`/twins/${twinId}/group-memberships`, {
+        user_id: selectedUserId,
+        group_id: groupId
       });
 
       if (response.ok) {
@@ -117,10 +106,7 @@ export default function GroupMembersPage() {
     }
 
     try {
-      const response = await fetch(`http://localhost:8000/group-memberships/${membershipId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const response = await del(`/group-memberships/${membershipId}`);
 
       if (response.ok) {
         fetchMembers();

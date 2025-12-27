@@ -1,8 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Card, CardHeader, CardContent, Badge, useToast } from '@/components/ui';
+import { useTwin } from '@/lib/context/TwinContext';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface ActionStats {
     pending_drafts: number;
@@ -33,6 +35,8 @@ interface PendingDraft {
 
 export default function ActionsPage() {
     const { showToast } = useToast();
+    const { activeTwin, isLoading: twinLoading } = useTwin();
+    const { get } = useAuthFetch();
     const [stats, setStats] = useState<ActionStats>({
         pending_drafts: 0,
         active_triggers: 0,
@@ -44,17 +48,16 @@ export default function ActionsPage() {
     const [pendingDrafts, setPendingDrafts] = useState<PendingDraft[]>([]);
     const [loading, setLoading] = useState(true);
 
-    const twinId = "eeeed554-9180-4229-a9af-0f8dd2c69e9b";
+    const twinId = activeTwin?.id;
 
-    const fetchData = async () => {
+    const fetchData = useCallback(async () => {
+        if (!twinId) return;
         try {
-            const auth = { 'Authorization': 'Bearer development_token' };
-
             const [triggersRes, execsRes, draftsRes, connectorsRes] = await Promise.all([
-                fetch(`http://localhost:8000/twins/${twinId}/triggers`, { headers: auth }),
-                fetch(`http://localhost:8000/twins/${twinId}/executions?limit=5`, { headers: auth }),
-                fetch(`http://localhost:8000/twins/${twinId}/action-drafts`, { headers: auth }),
-                fetch(`http://localhost:8000/twins/${twinId}/connectors`, { headers: auth })
+                get(`/twins/${twinId}/triggers`),
+                get(`/twins/${twinId}/executions?limit=5`),
+                get(`/twins/${twinId}/action-drafts`),
+                get(`/twins/${twinId}/connectors`)
             ]);
 
             const triggers = triggersRes.ok ? await triggersRes.json() : [];
@@ -79,11 +82,15 @@ export default function ActionsPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [twinId, get]);
 
     useEffect(() => {
-        fetchData();
-    }, []);
+        if (twinId) {
+            fetchData();
+        } else if (!twinLoading) {
+            setLoading(false);
+        }
+    }, [twinId, twinLoading, fetchData]);
 
     const getStatusColor = (status: string) => {
         switch (status) {
@@ -104,6 +111,33 @@ export default function ActionsPage() {
             default: return '⚡';
         }
     };
+
+    if (twinLoading) {
+        return (
+            <div className="flex justify-center p-20">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
+            </div>
+        );
+    }
+
+    if (!twinId) {
+        return (
+            <div className="flex items-center justify-center h-96">
+                <div className="text-center max-w-md p-8">
+                    <div className="w-16 h-16 bg-indigo-900/50 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                        <svg className="w-8 h-8 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                    </div>
+                    <h2 className="text-2xl font-bold text-white mb-3">No Twin Found</h2>
+                    <p className="text-slate-400 mb-6">Create a digital twin first to access the Actions Hub.</p>
+                    <a href="/dashboard/right-brain" className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+                        Create Your Twin
+                    </a>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="max-w-6xl mx-auto space-y-8 pb-20">

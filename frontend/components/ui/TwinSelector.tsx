@@ -20,9 +20,6 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:80
 // Specialization icons
 const SPEC_ICONS: Record<string, string> = {
     vanilla: '🧠',
-    vc: '💼',
-    legal: '⚖️',
-    medical: '🏥',
 };
 
 export const TwinSelector: React.FC<TwinSelectorProps> = ({
@@ -128,7 +125,7 @@ export const TwinSelector: React.FC<TwinSelectorProps> = ({
                         {activeTwin?.name || 'Select Twin'}
                     </p>
                     <p className="text-xs text-slate-500 capitalize">
-                        {activeTwin?.specialization === 'vc' ? 'VC Brain' : 'Digital Twin'}
+                        Digital Twin
                     </p>
                 </div>
 
@@ -167,7 +164,7 @@ export const TwinSelector: React.FC<TwinSelectorProps> = ({
                                         {twin.name}
                                     </p>
                                     <p className="text-xs text-slate-500 capitalize">
-                                        {twin.specialization === 'vc' ? 'VC Brain' : 'Digital Twin'}
+                                        Digital Twin
                                     </p>
                                 </div>
                                 {twin.id === activeTwinId && (

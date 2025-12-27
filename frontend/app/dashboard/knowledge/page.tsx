@@ -1,6 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useTwin } from '@/lib/context/TwinContext';
+import { getSupabaseClient } from '@/lib/supabase/client';
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
 interface Source {
   id: string;
@@ -81,6 +85,8 @@ const KnowledgeInsights = ({ profile }: { profile: KnowledgeProfile | null }) =>
 };
 
 export default function KnowledgePage() {
+  const { activeTwin, isLoading: twinLoading } = useTwin();
+  const supabase = getSupabaseClient();
   const [sources, setSources] = useState<Source[]>([]);
   const [profile, setProfile] = useState<KnowledgeProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -93,16 +99,25 @@ export default function KnowledgePage() {
   const [ingestingX, setIngestingX] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const twinId = "eeeed554-9180-4229-a9af-0f8dd2c69e9b"; // Fixed for dev
+  const twinId = activeTwin?.id;
 
-  const fetchData = async () => {
+  // Get auth token helper
+  const getAuthToken = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token;
+  }, [supabase]);
+
+  const fetchData = useCallback(async () => {
+    if (!twinId) return;
+    const token = await getAuthToken();
+    if (!token) return;
     try {
       const [sourcesRes, profileRes] = await Promise.all([
-        fetch(`http://localhost:8000/sources/${twinId}`, {
-          headers: { 'Authorization': 'Bearer development_token' }
+        fetch(`${API_BASE_URL}/sources/${twinId}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
         }),
-        fetch(`http://localhost:8000/twins/${twinId}/knowledge-profile`, {
-          headers: { 'Authorization': 'Bearer development_token' }
+        fetch(`${API_BASE_URL}/twins/${twinId}/knowledge-profile`, {
+          headers: { 'Authorization': `Bearer ${token}` }
         })
       ]);
 
@@ -114,25 +129,34 @@ export default function KnowledgePage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [twinId, getAuthToken]);
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    if (twinId) {
+      fetchData();
+    }
+  }, [twinId, fetchData]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !twinId) return;
 
     setUploading(true);
     setError(null);
+    const token = await getAuthToken();
+    if (!token) {
+      setError('Not authenticated');
+      setUploading(false);
+      return;
+    }
+
     const formData = new FormData();
     formData.append('file', file);
 
     try {
-      const response = await fetch(`http://localhost:8000/ingest/${twinId}`, {
+      const response = await fetch(`${API_BASE_URL}/ingest/${twinId}`, {
         method: 'POST',
-        headers: { 'Authorization': 'Bearer development_token' },
+        headers: { 'Authorization': `Bearer ${token}` },
         body: formData,
       });
 
@@ -150,15 +174,22 @@ export default function KnowledgePage() {
   };
 
   const handleYoutubeIngest = async () => {
-    if (!youtubeUrl.trim()) return;
+    if (!youtubeUrl.trim() || !twinId) return;
 
     setIngestingYoutube(true);
     setError(null);
+    const token = await getAuthToken();
+    if (!token) {
+      setError('Not authenticated');
+      setIngestingYoutube(false);
+      return;
+    }
+
     try {
-      const response = await fetch(`http://localhost:8000/ingest/youtube/${twinId}`, {
+      const response = await fetch(`${API_BASE_URL}/ingest/youtube/${twinId}`, {
         method: 'POST',
         headers: {
-          'Authorization': 'Bearer development_token',
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ url: youtubeUrl }),
@@ -179,15 +210,22 @@ export default function KnowledgePage() {
   };
 
   const handlePodcastIngest = async () => {
-    if (!podcastUrl.trim()) return;
+    if (!podcastUrl.trim() || !twinId) return;
 
     setIngestingPodcast(true);
     setError(null);
+    const token = await getAuthToken();
+    if (!token) {
+      setError('Not authenticated');
+      setIngestingPodcast(false);
+      return;
+    }
+
     try {
-      const response = await fetch(`http://localhost:8000/ingest/podcast/${twinId}`, {
+      const response = await fetch(`${API_BASE_URL}/ingest/podcast/${twinId}`, {
         method: 'POST',
         headers: {
-          'Authorization': 'Bearer development_token',
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ url: podcastUrl }),
@@ -208,15 +246,22 @@ export default function KnowledgePage() {
   };
 
   const handleXIngest = async () => {
-    if (!xUrl.trim()) return;
+    if (!xUrl.trim() || !twinId) return;
 
     setIngestingX(true);
     setError(null);
+    const token = await getAuthToken();
+    if (!token) {
+      setError('Not authenticated');
+      setIngestingX(false);
+      return;
+    }
+
     try {
-      const response = await fetch(`http://localhost:8000/ingest/x/${twinId}`, {
+      const response = await fetch(`${API_BASE_URL}/ingest/x/${twinId}`, {
         method: 'POST',
         headers: {
-          'Authorization': 'Bearer development_token',
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ url: xUrl }),
@@ -237,16 +282,20 @@ export default function KnowledgePage() {
   };
 
   const handleDelete = async (sourceId: string) => {
+    if (!twinId) return;
+    const token = await getAuthToken();
+    if (!token) return;
+
     try {
-      const response = await fetch(`http://localhost:8000/sources/${twinId}/${sourceId}`, {
+      const response = await fetch(`${API_BASE_URL}/sources/${twinId}/${sourceId}`, {
         method: 'DELETE',
-        headers: { 'Authorization': 'Bearer development_token' }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       if (response.ok) {
         setSources(sources.filter(s => s.id !== sourceId));
         // Refresh profile stats after deletion
-        const profileRes = await fetch(`http://localhost:8000/twins/${twinId}/knowledge-profile`, {
-          headers: { 'Authorization': 'Bearer development_token' }
+        const profileRes = await fetch(`${API_BASE_URL}/twins/${twinId}/knowledge-profile`, {
+          headers: { 'Authorization': `Bearer ${token}` }
         });
         if (profileRes.ok) setProfile(await profileRes.json());
       }
@@ -254,6 +303,43 @@ export default function KnowledgePage() {
       console.error('Error deleting source:', error);
     }
   };
+
+  // Loading state
+  if (twinLoading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-slate-500">Loading your twin...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // No twin state
+  if (!twinId) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center max-w-md p-8">
+          <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <svg className="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-slate-900 mb-3">No Twin Found</h2>
+          <p className="text-slate-500 mb-6">
+            Create a digital twin first to upload knowledge sources.
+          </p>
+          <a
+            href="/dashboard/right-brain"
+            className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors"
+          >
+            Create Your Twin
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-6xl mx-auto space-y-10 pb-20">

@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { getSupabaseClient } from '@/lib/supabase/client';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface Job {
     id: string;
@@ -29,10 +29,9 @@ interface JobLog {
     created_at: string;
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-
 export default function JobDetailPage() {
     const params = useParams();
+    const { get } = useAuthFetch();
     const jobId = params.id as string;
 
     const [job, setJob] = useState<Job | null>(null);
@@ -43,20 +42,10 @@ export default function JobDetailPage() {
     const fetchJobDetails = useCallback(async () => {
         try {
             setLoading(true);
-            const supabase = getSupabaseClient();
-            const { data: { session } } = await supabase.auth.getSession();
-
-            if (!session) {
-                setError('Not authenticated');
-                return;
-            }
+            setError(null);
 
             // Fetch job details
-            const jobResponse = await fetch(`${API_BASE_URL}/jobs/${jobId}`, {
-                headers: {
-                    'Authorization': `Bearer ${session.access_token}`
-                }
-            });
+            const jobResponse = await get(`/jobs/${jobId}`);
 
             if (!jobResponse.ok) {
                 throw new Error('Failed to fetch job details');
@@ -66,11 +55,7 @@ export default function JobDetailPage() {
             setJob(jobData);
 
             // Fetch job logs
-            const logsResponse = await fetch(`${API_BASE_URL}/jobs/${jobId}/logs`, {
-                headers: {
-                    'Authorization': `Bearer ${session.access_token}`
-                }
-            });
+            const logsResponse = await get(`/jobs/${jobId}/logs`);
 
             if (logsResponse.ok) {
                 const logsData = await logsResponse.json();
@@ -81,7 +66,7 @@ export default function JobDetailPage() {
         } finally {
             setLoading(false);
         }
-    }, [jobId]);
+    }, [jobId, get]);
 
     useEffect(() => {
         if (jobId) {

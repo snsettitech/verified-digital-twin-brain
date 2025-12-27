@@ -1,11 +1,13 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
     Card, CardHeader, CardContent,
     Badge, Modal, Toggle,
     VerificationBadge, useToast
 } from '@/components/ui';
+import { useTwin } from '@/lib/context/TwinContext';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface AuditLog {
     id: string;
@@ -32,6 +34,8 @@ interface Source {
 
 export default function GovernancePage() {
     const { showToast } = useToast();
+    const { activeTwin, isLoading: twinLoading } = useTwin();
+    const { get, post, del } = useAuthFetch();
     const [logs, setLogs] = useState<AuditLog[]>([]);
     const [policies, setPolicies] = useState<Policy[]>([]);
     const [sources, setSources] = useState<Source[]>([]);
@@ -46,16 +50,16 @@ export default function GovernancePage() {
     const [promptShieldEnabled, setPromptShieldEnabled] = useState(true);
     const [consentLayerEnabled, setConsentLayerEnabled] = useState(true);
 
-    const twinId = "eeeed554-9180-4229-a9af-0f8dd2c69e9b"; // Dev twin ID
+    const twinId = activeTwin?.id;
 
-    const fetchData = async () => {
+    const fetchData = useCallback(async () => {
+        if (!twinId) return;
         try {
-            const auth = { 'Authorization': 'Bearer development_token' };
             const [logsRes, policiesRes, twinRes, sourcesRes] = await Promise.all([
-                fetch(`http://localhost:8000/governance/audit-logs?twin_id=${twinId}`, { headers: auth }),
-                fetch(`http://localhost:8000/governance/policies?twin_id=${twinId}`, { headers: auth }),
-                fetch(`http://localhost:8000/twins/${twinId}`, { headers: auth }),
-                fetch(`http://localhost:8000/sources?twin_id=${twinId}`, { headers: auth })
+                get(`/governance/audit-logs?twin_id=${twinId}`),
+                get(`/governance/policies?twin_id=${twinId}`),
+                get(`/twins/${twinId}`),
+                get(`/sources?twin_id=${twinId}`)
             ]);
 
             if (logsRes.ok) setLogs(await logsRes.json());
@@ -70,22 +74,20 @@ export default function GovernancePage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [twinId, get]);
 
     useEffect(() => {
-        fetchData();
-    }, []);
+        if (twinId) {
+            fetchData();
+        } else if (!twinLoading) {
+            setLoading(false);
+        }
+    }, [twinId, twinLoading, fetchData]);
 
     const handleRequestVerification = async () => {
+        if (!twinId) return;
         try {
-            const res = await fetch(`http://localhost:8000/governance/verify?twin_id=${twinId}`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': 'Bearer development_token',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ verification_method: 'MANUAL_REVIEW' })
-            });
+            const res = await post(`/governance/verify?twin_id=${twinId}`, { verification_method: 'MANUAL_REVIEW' });
             if (res.ok) {
                 setVStatus('pending');
                 setShowVerifyModal(false);
@@ -97,18 +99,12 @@ export default function GovernancePage() {
     };
 
     const handleCreatePolicy = async () => {
+        if (!twinId) return;
         try {
-            const res = await fetch(`http://localhost:8000/governance/policies?twin_id=${twinId}`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': 'Bearer development_token',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    policy_type: newPolicy.type,
-                    name: newPolicy.name,
-                    content: newPolicy.content
-                })
+            const res = await post(`/governance/policies?twin_id=${twinId}`, {
+                policy_type: newPolicy.type,
+                name: newPolicy.name,
+                content: newPolicy.content
             });
             if (res.ok) {
                 setShowPolicyModal(false);
@@ -127,18 +123,11 @@ export default function GovernancePage() {
         if (!confirm(`Are you sure you want to permanently delete "${source?.filename}"? This will remove it from the database AND the vector index. This action is IRREVERSIBLE.`)) return;
 
         try {
-            const res = await fetch(`http://localhost:8000/sources/${selectedSourceId}/deep-scrub`, {
-                method: 'DELETE',
-                headers: {
-                    'Authorization': 'Bearer development_token',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ reason: 'Manual Deep Scrub requested by owner' })
-            });
+            const res = await del(`/sources/${selectedSourceId}/deep-scrub`);
             if (res.ok) {
                 showToast('Deep scrub completed successfully', 'success');
                 setSelectedSourceId('');
-                fetchData(); // Refresh sources list
+                fetchData();
             } else {
                 const data = await res.json();
                 showToast(data.detail || 'Deep scrub failed', 'error');
@@ -156,8 +145,34 @@ export default function GovernancePage() {
             setConsentLayerEnabled(value);
             showToast(value ? 'Consent Layer enabled' : 'Consent Layer disabled', value ? 'success' : 'warning');
         }
-        // TODO: Persist to backend when endpoint is available
     };
+
+    if (twinLoading) {
+        return (
+            <div className="flex justify-center p-20">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
+            </div>
+        );
+    }
+
+    if (!twinId) {
+        return (
+            <div className="flex items-center justify-center h-96">
+                <div className="text-center max-w-md p-8">
+                    <div className="w-16 h-16 bg-indigo-900/50 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                        <svg className="w-8 h-8 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                        </svg>
+                    </div>
+                    <h2 className="text-2xl font-bold text-white mb-3">No Twin Found</h2>
+                    <p className="text-slate-400 mb-6">Create a digital twin first to access governance features.</p>
+                    <a href="/dashboard/right-brain" className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+                        Create Your Twin
+                    </a>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="max-w-6xl mx-auto space-y-8 pb-20">

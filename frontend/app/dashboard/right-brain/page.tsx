@@ -53,7 +53,7 @@ export default function RightBrainPage() {
                 return;
             }
 
-            const response = await fetch(`${API_BASE_URL}/twins/create`, {
+            const response = await fetch(`${API_BASE_URL}/twins`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -61,7 +61,8 @@ export default function RightBrainPage() {
                 },
                 body: JSON.stringify({
                     name: user?.full_name ? `${user.full_name}'s Twin` : 'My Digital Twin',
-                    specialization_id: 'vc-brain', // Default to VC Brain
+                    tenant_id: session.user.id,  // Use user's auth ID as tenant_id
+                    specialization: 'vc-brain',  // Field is 'specialization', not 'specialization_id'
                     settings: {}
                 })
             });

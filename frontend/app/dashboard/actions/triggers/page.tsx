@@ -1,8 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Card, CardHeader, CardContent, Badge, Modal, Toggle, useToast } from '@/components/ui';
+import { useTwin } from '@/lib/context/TwinContext';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface Trigger {
     id: string;
@@ -36,6 +38,8 @@ const ACTION_TYPES = [
 
 export default function TriggersPage() {
     const { showToast } = useToast();
+    const { activeTwin, isLoading: twinLoading } = useTwin();
+    const { get, post, put, del } = useAuthFetch();
     const [triggers, setTriggers] = useState<Trigger[]>([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
@@ -48,39 +52,38 @@ export default function TriggersPage() {
         requires_approval: true
     });
 
-    const twinId = "eeeed554-9180-4229-a9af-0f8dd2c69e9b";
+    const twinId = activeTwin?.id;
 
-    const fetchTriggers = async () => {
+    const fetchTriggers = useCallback(async () => {
+        if (!twinId) return;
         try {
-            const res = await fetch(`http://localhost:8000/twins/${twinId}/triggers?include_inactive=true`, {
-                headers: { 'Authorization': 'Bearer development_token' }
-            });
+            const res = await get(`/twins/${twinId}/triggers?include_inactive=true`);
             if (res.ok) setTriggers(await res.json());
         } catch (err) {
             console.error('Fetch error:', err);
         } finally {
             setLoading(false);
         }
-    };
+    }, [twinId, get]);
 
-    useEffect(() => { fetchTriggers(); }, []);
+    useEffect(() => {
+        if (twinId) {
+            fetchTriggers();
+        } else if (!twinLoading) {
+            setLoading(false);
+        }
+    }, [twinId, twinLoading, fetchTriggers]);
 
     const handleCreate = async () => {
+        if (!twinId) return;
         try {
-            const res = await fetch(`http://localhost:8000/twins/${twinId}/triggers`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': 'Bearer development_token',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    name: formData.name,
-                    description: formData.description,
-                    event_type: formData.event_type,
-                    action_type: formData.action_type,
-                    conditions: formData.keywords ? { keywords: formData.keywords.split(',').map(k => k.trim()) } : {},
-                    requires_approval: formData.requires_approval
-                })
+            const res = await post(`/twins/${twinId}/triggers`, {
+                name: formData.name,
+                description: formData.description,
+                event_type: formData.event_type,
+                action_type: formData.action_type,
+                conditions: formData.keywords ? { keywords: formData.keywords.split(',').map(k => k.trim()) } : {},
+                requires_approval: formData.requires_approval
             });
             if (res.ok) {
                 showToast('Trigger created successfully', 'success');
@@ -94,15 +97,9 @@ export default function TriggersPage() {
     };
 
     const handleToggle = async (id: string, isActive: boolean) => {
+        if (!twinId) return;
         try {
-            await fetch(`http://localhost:8000/twins/${twinId}/triggers/${id}`, {
-                method: 'PUT',
-                headers: {
-                    'Authorization': 'Bearer development_token',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ is_active: !isActive })
-            });
+            await put(`/twins/${twinId}/triggers/${id}`, { is_active: !isActive });
             fetchTriggers();
         } catch (err) {
             showToast('Failed to update trigger', 'error');
@@ -110,18 +107,43 @@ export default function TriggersPage() {
     };
 
     const handleDelete = async (id: string) => {
+        if (!twinId) return;
         if (!confirm('Are you sure you want to delete this trigger?')) return;
         try {
-            await fetch(`http://localhost:8000/twins/${twinId}/triggers/${id}`, {
-                method: 'DELETE',
-                headers: { 'Authorization': 'Bearer development_token' }
-            });
+            await del(`/twins/${twinId}/triggers/${id}`);
             showToast('Trigger deleted', 'success');
             fetchTriggers();
         } catch (err) {
             showToast('Failed to delete trigger', 'error');
         }
     };
+
+    if (twinLoading) {
+        return (
+            <div className="flex justify-center p-20">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
+            </div>
+        );
+    }
+
+    if (!twinId) {
+        return (
+            <div className="flex items-center justify-center h-96">
+                <div className="text-center max-w-md p-8">
+                    <div className="w-16 h-16 bg-indigo-900/50 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                        <svg className="w-8 h-8 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                    </div>
+                    <h2 className="text-2xl font-bold text-white mb-3">No Twin Found</h2>
+                    <p className="text-slate-400 mb-6">Create a digital twin first to configure triggers.</p>
+                    <a href="/dashboard/right-brain" className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+                        Create Your Twin
+                    </a>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="max-w-5xl mx-auto space-y-8 pb-20">

@@ -1,7 +1,9 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useTwin } from '@/lib/context/TwinContext';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface Source {
   id: string;
@@ -50,7 +52,11 @@ interface TrainingJob {
 export default function SourceDetailsPage() {
   const params = useParams();
   const router = useRouter();
+  const { activeTwin, isLoading: twinLoading } = useTwin();
+  const { get, post } = useAuthFetch();
+
   const sourceId = params.source_id as string;
+  const twinId = activeTwin?.id;
 
   const [source, setSource] = useState<Source | null>(null);
   const [healthChecks, setHealthChecks] = useState<HealthCheck[]>([]);
@@ -59,24 +65,14 @@ export default function SourceDetailsPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'health' | 'logs'>('overview');
 
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
-  }, [sourceId]);
+  const fetchData = useCallback(async () => {
+    if (!twinId) return;
 
-  const fetchData = async () => {
     try {
       const [sourceRes, healthRes, logsRes] = await Promise.all([
-        fetch(`http://localhost:8000/sources/${twinId}`, {
-          headers: { 'Authorization': 'Bearer development_token' }
-        }),
-        fetch(`http://localhost:8000/sources/${sourceId}/health`, {
-          headers: { 'Authorization': 'Bearer development_token' }
-        }),
-        fetch(`http://localhost:8000/sources/${sourceId}/logs`, {
-          headers: { 'Authorization': 'Bearer development_token' }
-        })
+        get(`/sources/${twinId}`),
+        get(`/sources/${sourceId}/health`),
+        get(`/sources/${sourceId}/logs`)
       ]);
 
       if (sourceRes.ok) {
@@ -96,9 +92,7 @@ export default function SourceDetailsPage() {
       }
 
       // Fetch training job if exists
-      const jobsRes = await fetch(`http://localhost:8000/training-jobs?twin_id=${twinId}`, {
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const jobsRes = await get(`/training-jobs?twin_id=${twinId}`);
       if (jobsRes.ok) {
         const jobs = await jobsRes.json();
         const job = jobs.find((j: TrainingJob) => j.source_id === sourceId);
@@ -109,17 +103,21 @@ export default function SourceDetailsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [twinId, sourceId, get]);
+
+  useEffect(() => {
+    if (twinId) {
+      fetchData();
+      const interval = setInterval(fetchData, 5000);
+      return () => clearInterval(interval);
+    } else if (!twinLoading) {
+      setLoading(false);
+    }
+  }, [twinId, twinLoading, fetchData]);
 
   const handleApprove = async () => {
     try {
-      const response = await fetch(`http://localhost:8000/sources/${sourceId}/approve`, {
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer development_token',
-          'Content-Type': 'application/json'
-        }
-      });
+      const response = await post(`/sources/${sourceId}/approve`, {});
       if (response.ok) {
         fetchData();
       }
@@ -133,14 +131,7 @@ export default function SourceDetailsPage() {
     if (!reason) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/sources/${sourceId}/reject`, {
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer development_token',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ reason })
-      });
+      const response = await post(`/sources/${sourceId}/reject`, { reason });
       if (response.ok) {
         fetchData();
       }
@@ -149,12 +140,24 @@ export default function SourceDetailsPage() {
     }
   };
 
-  const twinId = "eeeed554-9180-4229-a9af-0f8dd2c69e9b";
-
-  if (loading) {
+  if (twinLoading || loading) {
     return (
       <div className="max-w-6xl mx-auto p-20 flex justify-center">
         <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
+  if (!twinId) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center max-w-md p-8">
+          <h2 className="text-2xl font-bold text-slate-900 mb-3">No Twin Found</h2>
+          <p className="text-slate-500 mb-6">Create a digital twin first to view knowledge sources.</p>
+          <a href="/dashboard/right-brain" className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+            Create Your Twin
+          </a>
+        </div>
       </div>
     );
   }
@@ -204,8 +207,8 @@ export default function SourceDetailsPage() {
             key={tab}
             onClick={() => setActiveTab(tab as any)}
             className={`px-6 py-3 text-sm font-bold transition-all border-b-2 ${activeTab === tab
-                ? 'border-indigo-600 text-indigo-600'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
+              ? 'border-indigo-600 text-indigo-600'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
               }`}
           >
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -278,8 +281,8 @@ export default function SourceDetailsPage() {
                   <div className="flex items-center justify-between mb-2">
                     <span className="font-bold text-slate-800">{check.check_type}</span>
                     <span className={`px-2 py-1 text-xs font-bold rounded ${check.status === 'pass' ? 'bg-green-100 text-green-700' :
-                        check.status === 'fail' ? 'bg-red-100 text-red-700' :
-                          'bg-yellow-100 text-yellow-700'
+                      check.status === 'fail' ? 'bg-red-100 text-red-700' :
+                        'bg-yellow-100 text-yellow-700'
                       }`}>
                       {check.status.toUpperCase()}
                     </span>
@@ -306,8 +309,8 @@ export default function SourceDetailsPage() {
               {logs.map((log) => (
                 <div key={log.id} className="flex items-start gap-4 p-4 bg-slate-50 rounded-xl">
                   <span className={`px-2 py-1 text-xs font-bold rounded ${log.log_level === 'error' ? 'bg-red-100 text-red-700' :
-                      log.log_level === 'warning' ? 'bg-yellow-100 text-yellow-700' :
-                        'bg-blue-100 text-blue-700'
+                    log.log_level === 'warning' ? 'bg-yellow-100 text-yellow-700' :
+                      'bg-blue-100 text-blue-700'
                     }`}>
                     {log.log_level.toUpperCase()}
                   </span>
@@ -326,4 +329,3 @@ export default function SourceDetailsPage() {
     </div>
   );
 }
-

@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface GroupLimit {
   id: string;
@@ -18,13 +19,14 @@ interface GroupOverride {
 export default function GroupSettingsPage() {
   const params = useParams();
   const router = useRouter();
+  const { get, post } = useAuthFetch();
   const groupId = params.group_id as string;
-  
+
   const [group, setGroup] = useState<any>(null);
   const [limits, setLimits] = useState<GroupLimit[]>([]);
   const [overrides, setOverrides] = useState<GroupOverride[]>([]);
   const [loading, setLoading] = useState(true);
-  
+
   // Form states
   const [systemPrompt, setSystemPrompt] = useState('');
   const [temperature, setTemperature] = useState(0);
@@ -33,17 +35,9 @@ export default function GroupSettingsPage() {
   const [requestsPerDay, setRequestsPerDay] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    fetchGroupData();
-    fetchLimits();
-    fetchOverrides();
-  }, [groupId]);
-
-  const fetchGroupData = async () => {
+  const fetchGroupData = useCallback(async () => {
     try {
-      const response = await fetch(`http://localhost:8000/access-groups/${groupId}`, {
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const response = await get(`/access-groups/${groupId}`);
       if (response.ok) {
         const data = await response.json();
         setGroup(data);
@@ -53,17 +47,15 @@ export default function GroupSettingsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [groupId, get]);
 
-  const fetchLimits = async () => {
+  const fetchLimits = useCallback(async () => {
     try {
-      const response = await fetch(`http://localhost:8000/access-groups/${groupId}/limits`, {
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const response = await get(`/access-groups/${groupId}/limits`);
       if (response.ok) {
         const data = await response.json();
         setLimits(data);
-        
+
         // Populate form fields
         const rph = data.find((l: GroupLimit) => l.limit_type === 'requests_per_hour');
         const rpd = data.find((l: GroupLimit) => l.limit_type === 'requests_per_day');
@@ -73,22 +65,20 @@ export default function GroupSettingsPage() {
     } catch (error) {
       console.error('Error fetching limits:', error);
     }
-  };
+  }, [groupId, get]);
 
-  const fetchOverrides = async () => {
+  const fetchOverrides = useCallback(async () => {
     try {
-      const response = await fetch(`http://localhost:8000/access-groups/${groupId}/overrides`, {
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const response = await get(`/access-groups/${groupId}/overrides`);
       if (response.ok) {
         const data = await response.json();
         setOverrides(data);
-        
+
         // Populate form fields
         const sysPrompt = data.find((o: GroupOverride) => o.override_type === 'system_prompt');
         const temp = data.find((o: GroupOverride) => o.override_type === 'temperature');
         const maxTok = data.find((o: GroupOverride) => o.override_type === 'max_tokens');
-        
+
         if (sysPrompt) setSystemPrompt(sysPrompt.override_value);
         if (temp) setTemperature(temp.override_value);
         if (maxTok) setMaxTokens(maxTok.override_value);
@@ -96,7 +86,13 @@ export default function GroupSettingsPage() {
     } catch (error) {
       console.error('Error fetching overrides:', error);
     }
-  };
+  }, [groupId, get]);
+
+  useEffect(() => {
+    fetchGroupData();
+    fetchLimits();
+    fetchOverrides();
+  }, [fetchGroupData, fetchLimits, fetchOverrides]);
 
   const handleSaveLimit = async (limitType: string, limitValue: number | null) => {
     if (limitValue === null || limitValue <= 0) {
@@ -106,10 +102,7 @@ export default function GroupSettingsPage() {
 
     setSaving(true);
     try {
-      const response = await fetch(`http://localhost:8000/access-groups/${groupId}/limits?limit_type=${encodeURIComponent(limitType)}&limit_value=${limitValue}`, {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer development_token' }
-      });
+      const response = await post(`/access-groups/${groupId}/limits?limit_type=${encodeURIComponent(limitType)}&limit_value=${limitValue}`, {});
 
       if (response.ok) {
         fetchLimits();
@@ -128,16 +121,9 @@ export default function GroupSettingsPage() {
   const handleSaveOverride = async (overrideType: string, overrideValue: any) => {
     setSaving(true);
     try {
-      const response = await fetch(`http://localhost:8000/access-groups/${groupId}/overrides`, {
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer development_token',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          override_type: overrideType,
-          override_value: overrideValue
-        })
+      const response = await post(`/access-groups/${groupId}/overrides`, {
+        override_type: overrideType,
+        override_value: overrideValue
       });
 
       if (response.ok) {

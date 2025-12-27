@@ -1,6 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useTwin } from '@/lib/context/TwinContext';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface TrainingJob {
   id: string;
@@ -21,9 +23,9 @@ interface Source {
   filename: string;
 }
 
-const twinId = "eeeed554-9180-4229-a9af-0f8dd2c69e9b"; // Fixed for dev
-
 export default function TrainingJobsPage() {
+  const { activeTwin, isLoading: twinLoading } = useTwin();
+  const { get, post } = useAuthFetch();
   const [jobs, setJobs] = useState<TrainingJob[]>([]);
   const [sources, setSources] = useState<Record<string, Source>>({});
   const [loading, setLoading] = useState(true);
@@ -31,21 +33,14 @@ export default function TrainingJobsPage() {
   const [selectedJob, setSelectedJob] = useState<TrainingJob | null>(null);
   const [processingQueue, setProcessingQueue] = useState(false);
 
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
-  }, []);
+  const twinId = activeTwin?.id;
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
+    if (!twinId) return;
     try {
       const [jobsRes, sourcesRes] = await Promise.all([
-        fetch(`http://localhost:8000/training-jobs?twin_id=${twinId}`, {
-          headers: { 'Authorization': 'Bearer development_token' }
-        }),
-        fetch(`http://localhost:8000/sources/${twinId}`, {
-          headers: { 'Authorization': 'Bearer development_token' }
-        })
+        get(`/training-jobs?twin_id=${twinId}`),
+        get(`/sources/${twinId}`)
       ]);
 
       if (jobsRes.ok) {
@@ -66,17 +61,21 @@ export default function TrainingJobsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [twinId, get]);
+
+  useEffect(() => {
+    if (twinId) {
+      fetchData();
+      const interval = setInterval(fetchData, 5000);
+      return () => clearInterval(interval);
+    } else if (!twinLoading) {
+      setLoading(false);
+    }
+  }, [twinId, twinLoading, fetchData]);
 
   const handleRetry = async (jobId: string) => {
     try {
-      const response = await fetch(`http://localhost:8000/training-jobs/${jobId}/retry`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': 'Bearer development_token',
-          'Content-Type': 'application/json'
-        }
-      });
+      const response = await post(`/training-jobs/${jobId}/retry`);
       if (response.ok) {
         fetchData();
       }
@@ -86,15 +85,10 @@ export default function TrainingJobsPage() {
   };
 
   const handleProcessQueue = async () => {
+    if (!twinId) return;
     setProcessingQueue(true);
     try {
-      const response = await fetch(`http://localhost:8000/training-jobs/process-queue?twin_id=${twinId}`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': 'Bearer development_token',
-          'Content-Type': 'application/json'
-        }
-      });
+      const response = await post(`/training-jobs/process-queue?twin_id=${twinId}`);
       if (response.ok) {
         const result = await response.json();
         alert(result.message || `Processed ${result.processed} job(s)`);
@@ -142,6 +136,33 @@ export default function TrainingJobsPage() {
     return `${Math.floor(diff / 3600)}h`;
   };
 
+  if (twinLoading) {
+    return (
+      <div className="flex justify-center p-20">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
+  if (!twinId) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center max-w-md p-8">
+          <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <svg className="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-slate-900 mb-3">No Twin Found</h2>
+          <p className="text-slate-500 mb-6">Create a digital twin first to manage training jobs.</p>
+          <a href="/dashboard/right-brain" className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+            Create Your Twin
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-6xl mx-auto space-y-10 pb-20">
       <div className="flex items-center justify-between">
@@ -164,11 +185,10 @@ export default function TrainingJobsPage() {
           <button
             key={status}
             onClick={() => setStatusFilter(status)}
-            className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${
-              statusFilter === status
+            className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${statusFilter === status
                 ? 'bg-indigo-600 text-white'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-            }`}
+              }`}
           >
             {status.charAt(0).toUpperCase() + status.slice(1).replace('_', ' ')}
           </button>
@@ -205,8 +225,8 @@ export default function TrainingJobsPage() {
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {filteredJobs.map((job) => (
-                  <tr 
-                    key={job.id} 
+                  <tr
+                    key={job.id}
                     className="hover:bg-slate-50/50 transition-colors cursor-pointer"
                     onClick={() => setSelectedJob(job)}
                   >
@@ -313,4 +333,3 @@ export default function TrainingJobsPage() {
     </div>
   );
 }
-

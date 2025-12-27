@@ -1,8 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Card, CardHeader, CardContent, Modal, useToast } from '@/components/ui';
+import { useTwin } from '@/lib/context/TwinContext';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface Execution {
     id: string;
@@ -35,6 +37,8 @@ interface ResponseItem {
 
 export default function HistoryPage() {
     const { showToast } = useToast();
+    const { activeTwin, isLoading: twinLoading } = useTwin();
+    const { get } = useAuthFetch();
     const [activeTab, setActiveTab] = useState<'all' | 'responses' | 'executions'>('all');
     const [executions, setExecutions] = useState<Execution[]>([]);
     const [responses, setResponses] = useState<ResponseItem[]>([]);
@@ -42,30 +46,33 @@ export default function HistoryPage() {
     const [selectedExec, setSelectedExec] = useState<Execution | null>(null);
     const [selectedResponse, setSelectedResponse] = useState<ResponseItem | null>(null);
 
-    const twinId = "eeeed554-9180-4229-a9af-0f8dd2c69e9b";
+    const twinId = activeTwin?.id;
 
-    const fetchData = async () => {
+    const fetchData = useCallback(async () => {
+        if (!twinId) return;
         setLoading(true);
         try {
             // Fetch executions
-            const execRes = await fetch(`http://localhost:8000/twins/${twinId}/executions?limit=100`, {
-                headers: { 'Authorization': 'Bearer development_token' }
-            });
+            const execRes = await get(`/twins/${twinId}/executions?limit=100`);
             if (execRes.ok) setExecutions(await execRes.json());
 
             // Fetch responded drafts
-            const respRes = await fetch(`http://localhost:8000/twins/${twinId}/action-drafts-all?status=responded&limit=100`, {
-                headers: { 'Authorization': 'Bearer development_token' }
-            });
+            const respRes = await get(`/twins/${twinId}/action-drafts-all?status=responded&limit=100`);
             if (respRes.ok) setResponses(await respRes.json());
         } catch (err) {
             console.error('Fetch error:', err);
         } finally {
             setLoading(false);
         }
-    };
+    }, [twinId, get]);
 
-    useEffect(() => { fetchData(); }, []);
+    useEffect(() => {
+        if (twinId) {
+            fetchData();
+        } else if (!twinLoading) {
+            setLoading(false);
+        }
+    }, [twinId, twinLoading, fetchData]);
 
     const getActionIcon = (type: string) => {
         switch (type) {
@@ -90,6 +97,33 @@ export default function HistoryPage() {
                 return <span className="px-2 py-0.5 bg-slate-500/10 text-slate-400 text-[10px] font-black rounded-lg">{status}</span>;
         }
     };
+
+    if (twinLoading) {
+        return (
+            <div className="flex justify-center p-20">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
+            </div>
+        );
+    }
+
+    if (!twinId) {
+        return (
+            <div className="flex items-center justify-center h-96">
+                <div className="text-center max-w-md p-8">
+                    <div className="w-16 h-16 bg-indigo-900/50 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                        <svg className="w-8 h-8 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                        </svg>
+                    </div>
+                    <h2 className="text-2xl font-bold text-white mb-3">No Twin Found</h2>
+                    <p className="text-slate-400 mb-6">Create a digital twin first to view activity history.</p>
+                    <a href="/dashboard/right-brain" className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+                        Create Your Twin
+                    </a>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="max-w-5xl mx-auto space-y-8 pb-20">

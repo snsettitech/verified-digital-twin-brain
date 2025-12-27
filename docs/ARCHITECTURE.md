@@ -1,130 +1,417 @@
-# System Architecture - Verified Digital Twin Brain
+# Digital Brain Architecture
 
-This document outlines the high-level architecture, data flows, and system components of the Verified Digital Twin Brain.
+> A Delphi-level Digital Brain MVP that learns day by day with multi-tenant isolation.
 
-## High-Level Overview
-
-The system is designed as a high-trust RAG (Retrieval-Augmented Generation) engine that enables users to interact with a "Digital Twin" backed by verified knowledge.
+## System Overview
 
 ```mermaid
-graph TD
-    subgraph Frontend [Next.js App Router]
-        Dashboard[Dashboard UI]
-        Chat[Chat Interface]
-        Upload[Document Upload]
+flowchart TB
+    subgraph "Frontend - Vercel"
+        FE[Next.js App]
+        Auth_UI[Auth Components]
+        Twin_UI[Twin Dashboard]
+        Chat_UI[Chat Interface]
+        Onboard_UI[Onboarding Flow]
     end
-
-    subgraph Backend [FastAPI]
-        API[FastAPI Endpoints]
-        Ingest[Ingestion Module]
-        Ret[Retrieval Module]
-        Ans[Answering Module]
-        Esc[Escalation Module]
+    
+    subgraph "Backend - Render"
+        API[FastAPI Server]
+        subgraph "Services"
+            Auth_Svc[Auth Service]
+            Twin_Svc[Twin Service]
+            Chat_Svc[Chat Service]
+            Ingest_Svc[Ingestion Service]
+            Graph_Svc[Graph Memory Service]
+            Escal_Svc[Escalation Service]
+        end
+        subgraph "Orchestration"
+            Retriever[Hybrid Retriever]
+            Scribe[Memory Scribe]
+            LlamaIdx[LlamaIndex PropertyGraph]
+        end
     end
-
-    subgraph Storage
-        Supabase[(Supabase - Auth/Postgres)]
-        Pinecone[(Pinecone - Vector DB)]
-        Files[Local/Cloud Storage]
+    
+    subgraph "Data Layer"
+        Supabase[(Supabase Postgres)]
+        Pinecone[(Pinecone Vectors)]
     end
-
-    Chat --> API
-    Upload --> API
-    API --> Ingest
-    API --> Ret
-    Ingest --> Files
-    Ingest --> Supabase
-    Ingest --> Pinecone
-    Ret --> Pinecone
-    Ret --> Ans
-    Ans --> Esc
-    Esc --> Supabase
+    
+    subgraph "External Services"
+        OpenAI[OpenAI GPT-4o]
+        Langfuse[Langfuse Tracing]
+    end
+    
+    FE --> API
+    API --> Supabase
+    API --> Pinecone
+    API --> OpenAI
+    API --> Langfuse
 ```
 
-## Data Flows
-
-### 1. Ingestion Pipeline
-When a document is uploaded, it follows this path:
-1. **Extraction**: Text is extracted from the PDF (currently via PyPDF2).
-2. **Chunking**: Text is split into smaller, overlapping chunks.
-3. **Embedding**: Each chunk is converted into a high-dimensional vector using OpenAI's `text-embedding-3-large`.
-4. **Indexing**: Vectors and metadata (source ID, twin ID) are stored in Pinecone.
-5. **Persistence**: Metadata about the source is stored in Supabase.
-
-### 2. RAG Chat Flow
-1. **Query Embedding**: The user's question is embedded using the same OpenAI model.
-2. **Vector Search**: Pinecone retrieves the top-K most similar chunks, filtered by `twin_id`.
-3. **Context Construction**: Chunks are assembled into a prompt for the LLM.
-4. **Answer Generation**: GPT-4 generates an answer with citations.
-5. **Confidence Scoring**: If retrieval scores are below a threshold (e.g., 0.7), an **Escalation** is created in Supabase for human review.
-
-## Database Schema (Supabase)
-
-The system uses the following core tables:
-- `twins`: Settings and identity for each digital twin.
-- `sources`: Metadata for ingested documents (PDFs, links, etc.).
-- `conversations`: Chat sessions.
-- `messages`: Individual user/assistant messages with confidence scores and citations.
-- `escalations`: Flagged interactions requiring owner verification.
-
-## Vector Schema (Pinecone)
-
-- **Namespace**: Default (or per-twin if scaled).
-- **Metadata**:
-  - `twin_id`: UUID for multi-tenancy.
-  - `source_id`: UUID of the original document.
-  - `text`: The raw text chunk.
-
-## Background Processing Foundation
-
-The system includes a jobs and logs infrastructure for tracking long-running operations like document ingestion, reindexing, and health checks.
+## Multi-Tenant Isolation Model
 
 ```mermaid
-graph LR
-    subgraph "Job Lifecycle"
-        Q[Queued] --> P[Processing]
-        P --> C[Complete]
-        P --> F[Failed]
-        P --> N[Needs Attention]
+flowchart LR
+    subgraph "Tenant A"
+        UA[User A] --> TA1[Twin A1]
+        UA --> TA2[Twin A2]
     end
+    
+    subgraph "Tenant B"  
+        UB[User B] --> TB1[Twin B1]
+    end
+    
+    subgraph "Supabase RLS"
+        RLS[Row Level Security]
+        RLS --> |tenant_id = jwt.tenant_id| Tables
+    end
+    
+    subgraph "Pinecone"
+        NS_A1[Namespace: tenant_a:twin_a1]
+        NS_A2[Namespace: tenant_a:twin_a2]
+        NS_B1[Namespace: tenant_b:twin_b1]
+    end
+    
+    TA1 --> NS_A1
+    TA2 --> NS_A2
+    TB1 --> NS_B1
+```
+
+## Database Schema
+
+```mermaid
+erDiagram
+    tenants ||--o{ users : has
+    users ||--o{ twins : owns
+    twins ||--o{ documents : contains
+    twins ||--o{ conversations : has
+    twins ||--o{ graph_nodes : has
+    twins ||--o{ memory_candidates : has
+    twins ||--o{ escalations : has
+    conversations ||--o{ messages : contains
+    graph_nodes ||--o{ graph_edges : from
+    graph_nodes ||--o{ graph_edges : to
+    
+    tenants {
+        uuid id PK
+        text name
+        jsonb settings
+        timestamp created_at
+    }
+    
+    users {
+        uuid id PK
+        uuid tenant_id FK
+        text email
+        text role
+        timestamp created_at
+    }
+    
+    twins {
+        uuid id PK
+        uuid tenant_id FK
+        uuid owner_id FK
+        text name
+        text description
+        text specialization
+        jsonb personality
+        text onboarding_status
+        timestamp created_at
+    }
+    
+    documents {
+        uuid id PK
+        uuid twin_id FK
+        uuid tenant_id FK
+        text title
+        text content
+        text source_type
+        jsonb metadata
+        text processing_status
+        timestamp created_at
+    }
+    
+    conversations {
+        uuid id PK
+        uuid twin_id FK
+        uuid tenant_id FK
+        uuid user_id FK
+        text mode
+        jsonb context
+        timestamp created_at
+    }
+    
+    messages {
+        uuid id PK
+        uuid conversation_id FK
+        uuid tenant_id FK
+        text role
+        text content
+        jsonb tool_calls
+        jsonb metadata
+        timestamp created_at
+    }
+    
+    graph_nodes {
+        uuid id PK
+        uuid twin_id FK
+        uuid tenant_id FK
+        text node_type
+        text name
+        text description
+        jsonb properties
+        float[] embedding
+        timestamp created_at
+    }
+    
+    graph_edges {
+        uuid id PK
+        uuid from_node_id FK
+        uuid to_node_id FK
+        uuid tenant_id FK
+        text relationship_type
+        float weight
+        jsonb properties
+        timestamp created_at
+    }
+    
+    memory_candidates {
+        uuid id PK
+        uuid twin_id FK
+        uuid tenant_id FK
+        uuid source_message_id FK
+        text content
+        text memory_type
+        text status
+        jsonb extracted_entities
+        timestamp created_at
+        timestamp reviewed_at
+    }
+    
+    escalations {
+        uuid id PK
+        uuid twin_id FK
+        uuid tenant_id FK
+        uuid source_conversation_id FK
+        text question
+        text context
+        text status
+        text owner_response
+        boolean add_to_brain
+        timestamp created_at
+        timestamp resolved_at
+    }
+```
+
+## API Architecture
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant API as FastAPI
+    participant Auth as Supabase Auth
+    participant DB as Supabase DB
+    participant PC as Pinecone
+    participant LLM as OpenAI
+    participant LF as Langfuse
+    
+    FE->>Auth: Sign In
+    Auth-->>FE: JWT Token
+    
+    FE->>API: Chat Request + JWT
+    API->>Auth: Verify JWT
+    Auth-->>API: User Claims (tenant_id)
+    
+    API->>LF: Start Trace
+    
+    par Hybrid Retrieval
+        API->>PC: Vector Search (namespace=twin_id)
+        API->>DB: Graph Query (RLS enforced)
+        API->>DB: Recent Conversations (RLS)
+    end
+    
+    PC-->>API: Relevant Docs
+    DB-->>API: Graph Context
+    DB-->>API: Conversation History
+    
+    API->>LLM: Generate Response
+    LLM-->>API: Response + Confidence
+    
+    alt Low Confidence
+        API->>DB: Create Escalation
+    end
+    
+    API->>DB: Extract Memory Candidates
+    API->>LF: End Trace
+    
+    API-->>FE: Chat Response
+```
+
+## Chat Retrieval Pipeline
+
+```mermaid
+flowchart TB
+    Query[User Query]
+    
+    subgraph "Hybrid Retrieval"
+        VecSearch[Vector Search - Pinecone]
+        GraphQuery[Graph Traversal - Postgres]
+        ConvHist[Conversation History]
+    end
+    
+    Query --> VecSearch
+    Query --> GraphQuery
+    Query --> ConvHist
+    
+    subgraph "Context Assembly"
+        DocContext[Document Chunks]
+        GraphBrief[Graph Brief]
+        HistContext[Recent Messages]
+    end
+    
+    VecSearch --> DocContext
+    GraphQuery --> GraphBrief
+    ConvHist --> HistContext
+    
+    subgraph "LLM Generation"
+        Prompt[System Prompt + Context]
+        GPT4[GPT-4o]
+        Response[Structured Response]
+    end
+    
+    DocContext --> Prompt
+    GraphBrief --> Prompt
+    HistContext --> Prompt
+    Prompt --> GPT4
+    GPT4 --> Response
+    
+    subgraph "Post-Processing"
+        ConfCheck{Confidence Check}
+        MemExtract[Memory Extraction]
+        Escalate[Create Escalation]
+    end
+    
+    Response --> ConfCheck
+    Response --> MemExtract
+    ConfCheck -->|Low| Escalate
+```
+
+## Memory Write Pipeline
+
+```mermaid
+flowchart TB
+    Msg[New Message]
+    
+    subgraph "Scribe Extraction"
+        Scribe[Memory Scribe - GPT-4o]
+        Struct[Structured Output]
+    end
+    
+    Msg --> Scribe
+    Scribe --> Struct
+    
+    subgraph "Extracted Data"
+        Entities[Named Entities]
+        Facts[Facts & Preferences]
+        Relations[Relationships]
+    end
+    
+    Struct --> Entities
+    Struct --> Facts
+    Struct --> Relations
     
     subgraph "Storage"
-        Jobs[(jobs table)]
-        Logs[(job_logs table)]
+        Candidates[memory_candidates table]
+        PendingNodes[Pending Graph Nodes]
     end
     
-    P --> Logs
-    F --> Logs
+    Entities --> Candidates
+    Facts --> Candidates
+    Relations --> PendingNodes
+    
+    subgraph "Owner Review"
+        Review[Approval Queue]
+        Approve{Approve?}
+    end
+    
+    Candidates --> Review
+    PendingNodes --> Review
+    Review --> Approve
+    
+    Approve -->|Yes| GraphNodes[graph_nodes]
+    Approve -->|Yes| GraphEdges[graph_edges]
+    Approve -->|Yes| Embeddings[Pinecone Vectors]
+    Approve -->|No| Archive[Archived]
 ```
 
-### Jobs Table
-- Tracks job status, type, priority, and metadata
-- Links to `twin_id` for ownership filtering
-- Status: `queued`, `processing`, `complete`, `failed`, `needs_attention`
-- Job types: `ingestion`, `reindex`, `health_check`, `other`
+## Security Model
 
-### Job Logs Table
-- Immutable log entries per job
-- Levels: `info`, `warning`, `error`
-- Used for debugging and audit trail
+| Layer | Mechanism | Enforcement |
+|-------|-----------|-------------|
+| Auth | Supabase Auth JWT | Every API request |
+| API | FastAPI Depends | Route middleware |
+| Database | Supabase RLS | Policy per table |
+| Vectors | Pinecone Namespace | `tenant_id:twin_id` |
+| LLM | No PII in prompts | Input sanitization |
 
-### API Endpoints
-- `GET /jobs` - List jobs (filtered by user's twins)
-- `GET /jobs/{id}` - Get job details
-- `GET /jobs/{id}/logs` - Get job logs
-- `POST /jobs` - Create new job
+## Technology Stack
 
-### Frontend UI
-- Dashboard page at `/dashboard/jobs`
-- Read-only view of job status and logs
-- Useful for monitoring ingestion progress
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Frontend | Next.js 14 | SSR, React, TypeScript |
+| Backend | FastAPI | Async API, Pydantic |
+| Auth | Supabase Auth | JWT, Social logins |
+| Database | Supabase Postgres | RLS, real-time |
+| Vectors | Pinecone | Semantic search |
+| Graph | Postgres + LlamaIndex | Property graph |
+| LLM | GPT-4o | Generation, extraction |
+| Tracing | Langfuse | Observability |
+| Eval | RAGAS | RAG quality metrics |
 
-## Operational Documentation
+## Directory Structure
 
-See `docs/ops/` for:
-- **AGENT_BRIEF.md** - How to operate in this repo
-- **QUALITY_GATE.md** - Definition of done, tests, rollback
-- **RUNBOOKS.md** - Troubleshooting guides
-- **LEARNINGS_LOG.md** - Compounding ledger of lessons
-- **ADR/** - Architecture decision records
-
+```
+deep-kuiper/
+├── frontend/                  # Next.js application
+│   ├── app/                   # App router pages
+│   ├── components/            # React components
+│   ├── lib/                   # Utilities, API client
+│   └── styles/                # CSS modules
+│
+├── backend/                   # FastAPI application
+│   ├── app/
+│   │   ├── api/              # Route handlers
+│   │   │   ├── auth.py
+│   │   │   ├── twins.py
+│   │   │   ├── chat.py
+│   │   │   ├── documents.py
+│   │   │   ├── memory.py
+│   │   │   └── escalations.py
+│   │   ├── core/             # Core utilities
+│   │   │   ├── config.py
+│   │   │   ├── security.py
+│   │   │   └── dependencies.py
+│   │   ├── services/         # Business logic
+│   │   │   ├── retrieval.py
+│   │   │   ├── scribe.py
+│   │   │   ├── graph.py
+│   │   │   └── llm.py
+│   │   ├── models/           # Pydantic models
+│   │   └── db/               # Database utilities
+│   ├── tests/                # Pytest tests
+│   └── requirements.txt
+│
+├── supabase/                  # Supabase config
+│   ├── migrations/           # SQL migrations
+│   └── seed.sql              # Test data
+│
+├── docs/                      # Documentation
+│   ├── architecture.md
+│   ├── api_contracts.md
+│   ├── security.md
+│   └── e2e_tests.md
+│
+├── scripts/                   # Utility scripts
+│
+└── .env.example              # Environment template
+```

@@ -1,8 +1,12 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useTwin } from '@/lib/context/TwinContext';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 export default function StudioPage() {
+  const { activeTwin, isLoading: twinLoading } = useTwin();
+  const { get, patch } = useAuthFetch();
   const [settings, setSettings] = useState<any>({
     name: 'Verified Twin',
     description: 'A digital clone of your verified knowledge.',
@@ -16,41 +20,36 @@ export default function StudioPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const twinId = "eeeed554-9180-4229-a9af-0f8dd2c69e9b";
+  const twinId = activeTwin?.id;
+
+  const fetchTwin = useCallback(async () => {
+    if (!twinId) return;
+    try {
+      const response = await get(`/twins/${twinId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setSettings(data);
+      }
+    } catch (error) {
+      console.error('Error fetching twin:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [twinId, get]);
 
   useEffect(() => {
-    const fetchTwin = async () => {
-      try {
-        const response = await fetch(`http://localhost:8000/twins/${twinId}`, {
-          headers: { 'Authorization': 'Bearer development_token' }
-        });
-        if (response.ok) {
-          const data = await response.json();
-          setSettings(data);
-        }
-      } catch (error) {
-        console.error('Error fetching twin:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    
-    // We don't have a direct endpoint for style profile yet, but let's simulate it 
-    // since we implemented the backend logic for it in agent.py
-    fetchTwin();
-  }, []);
+    if (twinId) {
+      fetchTwin();
+    } else if (!twinLoading) {
+      setLoading(false);
+    }
+  }, [twinId, twinLoading, fetchTwin]);
 
   const handleSave = async () => {
+    if (!twinId) return;
     setSaving(true);
     try {
-      const response = await fetch(`http://localhost:8000/twins/${twinId}`, {
-        method: 'PATCH',
-        headers: { 
-          'Authorization': 'Bearer development_token',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(settings)
-      });
+      const response = await patch(`/twins/${twinId}`, settings);
       if (response.ok) {
         // Show success
       }
@@ -61,7 +60,35 @@ export default function StudioPage() {
     }
   };
 
-  if (loading) return <div className="p-20 text-center animate-pulse text-slate-400">Loading your Twin's profile...</div>;
+  if (twinLoading || loading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-slate-500">Loading your Twin's profile...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!twinId) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center max-w-md p-8">
+          <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <svg className="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-slate-900 mb-3">No Twin Found</h2>
+          <p className="text-slate-500 mb-6">Create a digital twin first to access the Persona Studio.</p>
+          <a href="/dashboard/right-brain" className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+            Create Your Twin
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-4xl space-y-10">
@@ -97,22 +124,22 @@ export default function StudioPage() {
             <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
             Twin Identity
           </h3>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
               <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Twin Name</label>
-              <input 
-                type="text" 
+              <input
+                type="text"
                 value={settings.name}
-                onChange={(e) => setSettings({...settings, name: e.target.value})}
+                onChange={(e) => setSettings({ ...settings, name: e.target.value })}
                 className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500 font-bold"
               />
             </div>
             <div className="space-y-2">
               <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Public Avatar URL</label>
-              <input 
-                type="text" 
-                placeholder="https://..." 
+              <input
+                type="text"
+                placeholder="https://..."
                 className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -120,10 +147,10 @@ export default function StudioPage() {
 
           <div className="space-y-2">
             <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Bio / Description</label>
-            <textarea 
+            <textarea
               rows={3}
               value={settings.description}
-              onChange={(e) => setSettings({...settings, description: e.target.value})}
+              onChange={(e) => setSettings({ ...settings, description: e.target.value })}
               className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500 resize-none"
             />
           </div>
@@ -138,11 +165,11 @@ export default function StudioPage() {
 
           <div className="space-y-2">
             <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Custom System Prompt</label>
-            <textarea 
+            <textarea
               rows={6}
               value={settings.settings?.system_prompt || ''}
               onChange={(e) => setSettings({
-                ...settings, 
+                ...settings,
                 settings: { ...settings.settings, system_prompt: e.target.value }
               })}
               placeholder="You are the AI Digital Twin of..."
@@ -152,7 +179,7 @@ export default function StudioPage() {
           </div>
 
           <div className="flex justify-end pt-4">
-            <button 
+            <button
               onClick={handleSave}
               disabled={saving}
               className="px-10 py-3 bg-blue-600 text-white rounded-2xl text-sm font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 disabled:opacity-50"

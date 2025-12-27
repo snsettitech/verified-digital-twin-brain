@@ -1,12 +1,12 @@
 {
-    "opening_message": "I'm going to ask a few questions to understand what you want this twin to do. I'll repeat back what I heard and you can correct me. Ready?",
+    "opening_message": "Hello! I'm here to learn how you think. Let me ask a few questions to understand what you want this twin to do.",
     "intent_slots": [
         {
             "slot_id": "intent_use_case",
             "cluster_id": "intent",
             "priority": 0,
             "question": "What are you trying to use this twin for?",
-            "examples": "VC twin for my investment style, productivity twin, therapy-like reflection twin"
+            "examples": "knowledge assistant, writing helper, decision support, personal advisor"
         },
         {
             "slot_id": "intent_audience",
@@ -23,39 +23,9 @@
         }
     ],
     "confirmation_prompt": "Here's what I understood: {summary}. Did I get that right?",
-    "required_slots": [
-        {
-            "slot_id": "investment_thesis",
-            "cluster_id": "thesis",
-            "priority": 1
-        },
-        {
-            "slot_id": "check_size_range",
-            "cluster_id": "rubric",
-            "priority": 2
-        },
-        {
-            "slot_id": "stage_focus",
-            "cluster_id": "rubric",
-            "priority": 3
-        },
-        {
-            "slot_id": "sector_focus",
-            "cluster_id": "thesis",
-            "priority": 4
-        },
-        {
-            "slot_id": "deal_flow_sources",
-            "cluster_id": "process",
-            "priority": 5
-        }
-    ],
+    "required_slots": [],
     "cluster_ordering": [
-        "thesis",
-        "rubric",
-        "moat",
-        "process",
-        "comms"
+        "intent"
     ],
     "prioritization_weights": {
         "required": 1.0,

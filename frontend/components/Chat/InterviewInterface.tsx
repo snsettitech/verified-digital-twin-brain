@@ -41,8 +41,21 @@ export default function InterviewInterface({
     }, [messages, loading]);
 
     const getAuthToken = async (): Promise<string | null> => {
-        const { data: { session } } = await supabase.auth.getSession();
-        return session?.access_token || null;
+        try {
+            const timeoutPromise = new Promise<null>((resolve) => {
+                setTimeout(() => resolve(null), 2000);
+            });
+
+            const result = await Promise.race([
+                supabase.auth.getSession(),
+                timeoutPromise
+            ]) as any;
+
+            return result?.data?.session?.access_token || null;
+        } catch (e) {
+            console.warn('[InterviewInterface] getAuthToken failed:', e);
+            return null;
+        }
     };
 
     const sendMessage = async () => {
@@ -56,7 +69,8 @@ export default function InterviewInterface({
         try {
             const token = await getAuthToken();
             if (!token) {
-                throw new Error('Not authenticated');
+                // Auth session timed out - show specific error
+                throw new Error('Session expired. Please refresh the page to reconnect.');
             }
 
             const response = await fetch(`${API_BASE_URL}/cognitive/interview/${twinId}`, {

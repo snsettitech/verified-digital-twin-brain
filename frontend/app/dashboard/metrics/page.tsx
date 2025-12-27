@@ -2,9 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useTwin } from '@/lib/context/TwinContext';
-import { getSupabaseClient } from '@/lib/supabase/client';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+import { useAuthFetch } from '@/lib/hooks/useAuthFetch';
 
 interface MetricsSummary {
     total_requests: number;
@@ -43,52 +41,35 @@ interface QuotaInfo {
 
 export default function MetricsDashboard() {
     const { activeTwin, user } = useTwin();
+    const { get } = useAuthFetch();
     const [loading, setLoading] = useState(true);
     const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
     const [health, setHealth] = useState<HealthStatus | null>(null);
     const [quotas, setQuotas] = useState<QuotaInfo[]>([]);
     const [error, setError] = useState<string | null>(null);
 
-    const supabase = getSupabaseClient();
-
-    const getAuthToken = useCallback(async (): Promise<string | null> => {
-        const { data: { session } } = await supabase.auth.getSession();
-        return session?.access_token || null;
-    }, [supabase]);
-
     const fetchData = useCallback(async () => {
         try {
             setLoading(true);
             setError(null);
 
-            const token = await getAuthToken();
-            if (!token) {
-                setError('Not authenticated');
-                return;
-            }
-
-            const headers = {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            };
-
             // Fetch metrics summary
             if (activeTwin?.id) {
-                const metricsRes = await fetch(`${API_BASE_URL}/metrics/usage/${activeTwin.id}?days=7`, { headers });
+                const metricsRes = await get(`/metrics/usage/${activeTwin.id}?days=7`);
                 if (metricsRes.ok) {
                     setMetrics(await metricsRes.json());
                 }
             }
 
             // Fetch health status
-            const healthRes = await fetch(`${API_BASE_URL}/metrics/health`, { headers });
+            const healthRes = await get('/metrics/health');
             if (healthRes.ok) {
                 setHealth(await healthRes.json());
             }
 
             // Fetch quotas (if user has tenant)
             if (user?.tenant_id) {
-                const quotaRes = await fetch(`${API_BASE_URL}/metrics/quota/${user.tenant_id}`, { headers });
+                const quotaRes = await get(`/metrics/quota/${user.tenant_id}`);
                 if (quotaRes.ok) {
                     const data = await quotaRes.json();
                     setQuotas(data.quotas || []);
@@ -100,7 +81,7 @@ export default function MetricsDashboard() {
         } finally {
             setLoading(false);
         }
-    }, [activeTwin, user, getAuthToken]);
+    }, [activeTwin, user, get]);
 
     useEffect(() => {
         fetchData();

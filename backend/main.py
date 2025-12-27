@@ -16,7 +16,9 @@ from routers import (
     cognitive,
     graph,
     metrics,
-    jobs
+    jobs,
+    til,
+    feedback
 )
 from modules.specializations import get_specialization
 
@@ -47,6 +49,8 @@ app.include_router(cognitive.router)
 app.include_router(graph.router)
 app.include_router(metrics.router)
 app.include_router(jobs.router)
+app.include_router(til.router)
+app.include_router(feedback.router)
 
 # ============================================================================
 # P0 Deployment: Health Check Endpoint
@@ -141,11 +145,5 @@ if __name__ == "__main__":
 ╚══════════════════════════════════════════════════════════════╝
 """
         print(banner)
-        
-        # Show feature flags
-        features = spec.get_feature_flags()
-        vc_features = [k for k, v in features.items() if v and k not in ['actions_engine', 'verified_qna', 'access_groups', 'governance', 'escalations', 'share_links', 'analytics']]
-        if vc_features:
-            print(f"   VC Features Enabled: {', '.join(vc_features)}\n")
         
         uvicorn.run(app, host=host, port=port)

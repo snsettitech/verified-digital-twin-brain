@@ -371,6 +371,19 @@ def create_twin_agent(twin_id: str, group_id: Optional[str] = None, system_promp
     # Compile the graph
     return workflow.compile()
 
+# Langfuse v3 tracing
+try:
+    from langfuse import observe
+    _langfuse_available = True
+except ImportError:
+    _langfuse_available = False
+    def observe(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+
+@observe(name="agent_response")
 async def run_agent_stream(twin_id: str, query: str, history: List[BaseMessage] = None, system_prompt: str = None, group_id: Optional[str] = None):
     """
     Runs the agent and yields events from the graph.
@@ -418,22 +431,14 @@ async def run_agent_stream(twin_id: str, query: str, history: List[BaseMessage] 
             except Exception:
                 pass
 
-    # 3.5 Fetch Graph Context (Gate 4.5 Integration)
+    # 3.5 Fetch Graph Snapshot (P0.2 - Bounded, query-relevant)
     graph_context = ""
     try:
-        nodes_res = supabase.rpc("get_nodes_system", {"t_id": twin_id, "limit_val": 20}).execute()
-        if nodes_res.data:
-            node_summaries = []
-            for n in nodes_res.data:
-                props = n.get("properties", {}) or {}
-                # Extract value if it's a simple string/number properties
-                props_str = ", ".join([f"{k}: {v}" for k, v in props.items() if isinstance(v, (str, int, float))])
-                node_summaries.append(f"- {n['name']} ({n['type']}): {n['description']} {props_str}")
-            
-            if node_summaries:
-                graph_context = "MEMORIZED KNOWLEDGE (High Priority - Answer from here if relevant):\n" + "\n".join(node_summaries)
+        from modules.graph_context import get_graph_snapshot
+        snapshot = await get_graph_snapshot(twin_id, query=query)
+        graph_context = snapshot.get("context_text", "")
     except Exception as e:
-        print(f"Error fetching graph context: {e}")
+        print(f"Error fetching graph snapshot: {e}")
 
     agent = create_twin_agent(twin_id, group_id=group_id, system_prompt_override=system_prompt, full_settings=settings, graph_context=graph_context)
     
