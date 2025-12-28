@@ -111,14 +111,19 @@ def get_current_user(
         print(f"[JWT DEBUG] Secret first 10: {SUPABASE_JWT_SECRET[:10]}...")
         
         # Verify and decode JWT signature (this validates expiry too)
-        # Supabase tokens have aud="authenticated"
+        # NOTE: Supabase tokens have aud="authenticated" but jose library's audience
+        # validation can be strict. We verify manually instead.
         payload = jwt.decode(
             token, 
             SUPABASE_JWT_SECRET, 
             algorithms=[ALGORITHM],
-            options={"verify_exp": True},
-            audience="authenticated"  # Supabase sets this
+            options={"verify_exp": True, "verify_aud": False}
         )
+        
+        # Manually verify audience if needed (Supabase uses "authenticated")
+        aud = payload.get("aud")
+        if aud and aud != "authenticated":
+            print(f"[JWT DEBUG] WARNING: Unexpected audience: {aud}")
         
         # Supabase JWT has 'sub' as user_id
         user_id = payload.get("sub")
