@@ -158,4 +158,18 @@ export async function authFetchStandalone(
     });
 }
 
+/**
+ * Standalone function to get auth token (for use outside React hooks, e.g., streaming)
+ */
+export async function getAuthToken(): Promise<string | null> {
+    const supabase = getSupabaseClient();
+    try {
+        const { data: { session } } = await supabase.auth.getSession();
+        return session?.access_token || null;
+    } catch (error) {
+        console.error('Failed to get auth token:', error);
+        return null;
+    }
+}
+
 export { API_BASE_URL };
