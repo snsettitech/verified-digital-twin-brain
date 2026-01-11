@@ -12,9 +12,12 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import logging
 import json
+import hashlib
 
 from modules.clients import get_async_openai_client
 from modules.observability import supabase
+from modules.jobs import create_job, JobType, JobStatus, start_job, complete_job, fail_job, append_log, LogLevel
+from modules.job_queue import enqueue_job
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +264,165 @@ async def _persist_edges(twin_id: str, edges: List[EdgeUpdate], node_map: Dict[s
             logger.error(f"Failed to create edge {edge.from_node}->{edge.to_node}: {e}")
             
     return results
+
+
+# --- Job Queue Integration (P0-D) ---
+
+def _generate_idempotency_key(conversation_id: str, user_message: str, assistant_message: str) -> str:
+    """
+    Generate idempotency key for graph extraction job.
+    Format: conversation_id:hash(user_message + assistant_message)
+    """
+    content_hash = hashlib.sha256(
+        (user_message + assistant_message).encode('utf-8')
+    ).hexdigest()[:16]
+    return f"{conversation_id}:{content_hash}"
+
+
+def enqueue_graph_extraction_job(
+    twin_id: str,
+    user_message: str,
+    assistant_message: str,
+    history: List[Dict[str, Any]] = None,
+    tenant_id: str = None,
+    conversation_id: str = None
+) -> str:
+    """
+    Enqueue a graph extraction job instead of fire-and-forget.
+    Makes extraction observable and reliable with retries.
+    
+    Returns:
+        Job ID (UUID)
+    """
+    if not conversation_id:
+        # Can't create idempotency key without conversation_id
+        print("[Graph Extraction] Warning: No conversation_id, skipping job enqueue")
+        return None
+    
+    # Generate idempotency key
+    idempotency_key = _generate_idempotency_key(conversation_id, user_message, assistant_message)
+    
+    # Check if already processed (idempotency check)
+    from modules.observability import supabase
+    try:
+        # Check for existing job with same idempotency key
+        # Query jobs and filter in Python (Supabase client JSONB query is limited)
+        existing_jobs_result = supabase.table("jobs").select("id, status, metadata").eq("twin_id", twin_id).eq("job_type", JobType.GRAPH_EXTRACTION.value).order("created_at", desc=True).limit(50).execute()
+        if existing_jobs_result.data:
+            for existing_job in existing_jobs_result.data:
+                job_metadata = existing_job.get("metadata", {})
+                if isinstance(job_metadata, dict) and job_metadata.get("idempotency_key") == idempotency_key:
+                    if existing_job["status"] in [JobStatus.COMPLETE.value, JobStatus.PROCESSING.value]:
+                        print(f"[Graph Extraction] Job already processed (idempotency_key={idempotency_key}, job_id={existing_job['id']})")
+                        return existing_job["id"]
+    except Exception as e:
+        print(f"[Graph Extraction] Error checking idempotency: {e}")
+    
+    # Create job metadata
+    metadata = {
+        "idempotency_key": idempotency_key,
+        "user_message": user_message,
+        "assistant_message": assistant_message,
+        "conversation_id": conversation_id,
+        "tenant_id": tenant_id,
+        "history_count": len(history) if history else 0
+    }
+    
+    # Create job in database
+    job = create_job(
+        job_type=JobType.GRAPH_EXTRACTION,
+        twin_id=twin_id,
+        priority=0,  # Normal priority
+        metadata=metadata
+    )
+    
+    # Enqueue to Redis/queue
+    enqueue_job(job.id, JobType.GRAPH_EXTRACTION.value, priority=0, metadata=metadata)
+    
+    print(f"[Graph Extraction] Enqueued job {job.id} for twin {twin_id}, conversation {conversation_id}")
+    return job.id
+
+
+async def process_graph_extraction_job(job_id: str) -> bool:
+    """
+    Process a graph extraction job (called by worker).
+    Includes retry logic and error handling.
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    from modules.observability import supabase
+    from modules.memory_events import create_memory_event
+    
+    # Get job details
+    job_result = supabase.table("jobs").select("*").eq("id", job_id).single().execute()
+    if not job_result.data:
+        print(f"[Graph Extraction] Job {job_id} not found")
+        return False
+    
+    job = job_result.data
+    metadata = job.get("metadata", {})
+    twin_id = job["twin_id"]
+    idempotency_key = metadata.get("idempotency_key")
+    user_message = metadata.get("user_message", "")
+    assistant_message = metadata.get("assistant_message", "")
+    conversation_id = metadata.get("conversation_id")
+    tenant_id = metadata.get("tenant_id")
+    history_count = metadata.get("history_count", 0)
+    
+    # Mark as processing
+    try:
+        start_job(job_id)
+        append_log(job_id, f"Starting graph extraction for conversation {conversation_id}", LogLevel.INFO)
+    except Exception as e:
+        print(f"[Graph Extraction] Error starting job {job_id}: {e}")
+        return False
+    
+    # Retry logic
+    max_retries = 3
+    retry_delay = 1.0  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            # Call process_interaction (core extraction logic)
+            result = await process_interaction(
+                twin_id=twin_id,
+                user_message=user_message,
+                assistant_message=assistant_message,
+                history=None,  # History is not stored in job metadata
+                tenant_id=tenant_id,
+                conversation_id=conversation_id
+            )
+            
+            # Check for errors
+            if result.get("error"):
+                raise Exception(result["error"])
+            
+            # Mark as complete
+            complete_job(job_id, metadata={
+                "nodes_created": len(result.get("nodes", [])),
+                "edges_created": len(result.get("edges", [])),
+                "confidence": result.get("confidence", 0.0)
+            })
+            append_log(job_id, f"Graph extraction completed: {len(result.get('nodes', []))} nodes, {len(result.get('edges', []))} edges", LogLevel.INFO)
+            return True
+            
+        except Exception as e:
+            error_msg = str(e)
+            print(f"[Graph Extraction] Attempt {attempt + 1}/{max_retries} failed for job {job_id}: {error_msg}")
+            append_log(job_id, f"Attempt {attempt + 1} failed: {error_msg}", LogLevel.ERROR, metadata={"attempt": attempt + 1})
+            
+            if attempt < max_retries - 1:
+                # Wait before retry (exponential backoff)
+                import asyncio
+                await asyncio.sleep(retry_delay * (2 ** attempt))
+            else:
+                # All retries exhausted
+                fail_job(job_id, f"Failed after {max_retries} attempts: {error_msg}")
+                append_log(job_id, f"Job failed after {max_retries} attempts", LogLevel.ERROR)
+                return False
+    
+    return False
 
 
 # --- Legacy Support ---

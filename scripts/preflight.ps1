@@ -33,6 +33,10 @@ Write-Host "→ Running lint..."
 npm run lint
 if ($LASTEXITCODE -ne 0) { throw "npm run lint failed" }
 
+Write-Host "→ Running typecheck..."
+npm run typecheck
+if ($LASTEXITCODE -ne 0) { throw "npm run typecheck failed" }
+
 Write-Host "→ Running build..."
 npm run build
 if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }

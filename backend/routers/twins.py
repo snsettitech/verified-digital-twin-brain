@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
-from modules.auth_guard import verify_owner, get_current_user
+from modules.auth_guard import verify_owner, get_current_user, verify_twin_ownership
 from modules.schemas import (
     TwinSettingsUpdate, GroupCreateRequest, GroupUpdateRequest,
     AssignUserRequest, ContentPermissionRequest,
@@ -78,48 +78,42 @@ async def create_twin(request: TwinCreateRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-from modules._core.tenant_guard import verify_twin_access
-from fastapi import Request
+from modules.auth_guard import verify_twin_ownership
 
 @router.get("/twins")
-async def list_twins(request: Request):
-    """List all twins. Returns user's twins if authenticated, or all twins if not."""
+async def list_twins(user=Depends(get_current_user)):
+    """List all twins for the authenticated user's tenant."""
     try:
-        # Try to get user from auth header if present
-        user_id = None
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            # For now, skip token validation for development
-            # In production, validate JWT and get user_id
-            pass
+        tenant_id = user.get("tenant_id")
+        if not tenant_id:
+            # User has no tenant - return empty list (not an error)
+            return []
         
-        if user_id:
-            # Get twins where user is the tenant (owner)
-            response = supabase.table("twins").select("*").eq("tenant_id", user_id).order("created_at", desc=True).execute()
-        else:
-            # Fallback: get all twins (for anonymous/testing)
-            response = supabase.table("twins").select("*").order("created_at", desc=True).limit(10).execute()
-        
+        # Get twins where tenant_id matches user's tenant
+        response = supabase.table("twins").select("*").eq("tenant_id", tenant_id).order("created_at", desc=True).execute()
         return response.data if response.data else []
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/twins/{twin_id}")
-async def get_twin(
-    twin_id: str, 
-    user=Depends(verify_owner),
-    authorized=Depends(verify_twin_access)
-):
+async def get_twin(twin_id: str, user=Depends(get_current_user)):
+    """Get a specific twin. Verifies ownership."""
+    # Verify user has access to this twin
+    verify_twin_ownership(twin_id, user)
+    
     # Use RPC to bypass RLS for system lookup
     response = supabase.rpc("get_twin_system", {"t_id": twin_id}).single().execute()
     if not response.data:
-        raise HTTPException(status_code=404, detail="Twin not found")
+        raise HTTPException(status_code=404, detail="Twin not found or access denied")
     return response.data
 
 
 @router.get("/twins/{twin_id}/sidebar-config")
-async def get_sidebar_config(twin_id: str):
+async def get_sidebar_config(twin_id: str, user=Depends(get_current_user)):
     """Get sidebar configuration based on twin's specialization."""
+    # Verify user has access to this twin
+    verify_twin_ownership(twin_id, user)
+    
     try:
         # Get twin to find its specialization
         response = supabase.table("twins").select("specialization").eq("id", twin_id).execute()
@@ -146,6 +140,9 @@ async def get_twin_graph_stats(twin_id: str, user=Depends(get_current_user)):
         - has_graph: Whether the twin has any graph data
         - top_nodes: Preview of key knowledge items
     """
+    # Verify user has access to this twin
+    verify_twin_ownership(twin_id, user)
+    
     from modules.graph_context import get_graph_stats
     try:
         stats = get_graph_stats(twin_id)
@@ -158,8 +155,79 @@ async def get_twin_graph_stats(twin_id: str, user=Depends(get_current_user)):
             "error": str(e)
         }
 
+@router.get("/twins/{twin_id}/graph-job-status")
+async def get_graph_job_status(twin_id: str, user=Depends(get_current_user)):
+    """Get graph extraction job status for a twin (P0-D).
+    
+    Returns:
+        - last_success: Timestamp of last successful graph extraction
+        - last_failure: Timestamp of last failed graph extraction
+        - backlog_count: Number of pending/queued jobs
+        - recent_errors: List of recent error messages
+    """
+    # Verify user has access to this twin
+    verify_twin_ownership(twin_id, user)
+    
+    from modules.jobs import JobType, JobStatus, list_jobs
+    from modules.observability import supabase
+    from datetime import datetime, timedelta
+    
+    try:
+        # Get graph extraction jobs for this twin
+        graph_jobs = list_jobs(
+            twin_id=twin_id,
+            job_type=JobType.GRAPH_EXTRACTION,
+            limit=100
+        )
+        
+        # Find last success and last failure
+        last_success = None
+        last_failure = None
+        backlog_count = 0
+        recent_errors = []
+        
+        for job in graph_jobs:
+            # Check if completed
+            if job.status == JobStatus.COMPLETE:
+                if not last_success or (job.completed_at and job.completed_at > last_success):
+                    last_success = job.completed_at
+            # Check if failed
+            elif job.status == JobStatus.FAILED:
+                if not last_failure or (job.completed_at and job.completed_at > last_failure):
+                    last_failure = job.completed_at
+                    if job.error_message:
+                        recent_errors.append({
+                            "timestamp": job.completed_at.isoformat() if job.completed_at else None,
+                            "error": job.error_message
+                        })
+            # Check if pending/queued
+            elif job.status in [JobStatus.QUEUED, JobStatus.PROCESSING]:
+                backlog_count += 1
+        
+        # Limit recent errors to last 5
+        recent_errors = sorted(recent_errors, key=lambda x: x["timestamp"] or "", reverse=True)[:5]
+        
+        return {
+            "last_success": last_success.isoformat() if last_success else None,
+            "last_failure": last_failure.isoformat() if last_failure else None,
+            "backlog_count": backlog_count,
+            "recent_errors": recent_errors
+        }
+    except Exception as e:
+        print(f"Error fetching graph job status: {e}")
+        return {
+            "last_success": None,
+            "last_failure": None,
+            "backlog_count": 0,
+            "recent_errors": [],
+            "error": str(e)
+        }
+
 @router.patch("/twins/{twin_id}")
 async def update_twin(twin_id: str, update: TwinSettingsUpdate, user=Depends(verify_owner)):
+    # Verify user has access to this twin
+    verify_twin_ownership(twin_id, user)
+    
     update_data = {k: v for k, v in update.model_dump().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="No data to update")
@@ -172,6 +240,9 @@ async def update_twin(twin_id: str, update: TwinSettingsUpdate, user=Depends(ver
 @router.get("/twins/{twin_id}/access-groups")
 async def list_access_groups(twin_id: str, user=Depends(verify_owner)):
     """List all access groups for a twin."""
+    # Verify user has access to this twin
+    verify_twin_ownership(twin_id, user)
+    
     try:
         groups = await list_groups(twin_id)
         return groups
@@ -181,6 +252,9 @@ async def list_access_groups(twin_id: str, user=Depends(verify_owner)):
 @router.post("/twins/{twin_id}/access-groups")
 async def create_access_group(twin_id: str, request: GroupCreateRequest, user=Depends(verify_owner)):
     """Create a new access group for a twin."""
+    # Verify user has access to this twin
+    verify_twin_ownership(twin_id, user)
+    
     try:
         group_id = await create_group(
             twin_id=twin_id,
@@ -246,6 +320,9 @@ async def list_group_members(group_id: str, user=Depends(get_current_user)):
 @router.post("/twins/{twin_id}/group-memberships")
 async def assign_user_to_group_endpoint(twin_id: str, request: AssignUserRequest, user=Depends(verify_owner)):
     """Assign user to a group (replaces existing membership for that twin)."""
+    # Verify user has access to this twin
+    verify_twin_ownership(twin_id, user)
+    
     try:
         await assign_user_to_group(request.user_id, twin_id, request.group_id)
         return {"message": "User assigned to group successfully"}

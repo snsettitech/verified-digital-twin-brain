@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 
-from modules.auth_guard import get_current_user, verify_twin_access
+from modules.auth_guard import get_current_user, verify_twin_ownership
 from modules.memory_events import (
     get_til_feed, get_memory_events, 
     create_memory_event, update_memory_event
@@ -42,7 +42,7 @@ async def get_til_feed_endpoint(
     
     Returns recent memory events with human-readable summaries.
     """
-    verify_twin_access(twin_id, user)
+    verify_twin_ownership(twin_id, user)
     
     try:
         events = await get_til_feed(twin_id, days=days)
@@ -62,6 +62,8 @@ async def list_memory_events_endpoint(
     event_type: Optional[str] = None,
     user=Depends(get_current_user)
 ):
+    # Verify user has access to this twin
+    verify_twin_ownership(twin_id, user)
     """
     List all memory events for a twin.
     
@@ -69,7 +71,7 @@ async def list_memory_events_endpoint(
     - limit: Max events to return
     - event_type: Filter by type (auto_extract, manual_edit, confirm, delete)
     """
-    verify_twin_access(twin_id, user)
+    verify_twin_ownership(twin_id, user)
     
     try:
         events = await get_memory_events(twin_id, limit=limit, event_type=event_type)
@@ -94,7 +96,7 @@ async def confirm_memory_endpoint(
     
     Creates a 'confirm' MemoryEvent to record the confirmation.
     """
-    verify_twin_access(twin_id, user)
+    verify_twin_ownership(twin_id, user)
     tenant_id = user.get("tenant_id")
     
     if not tenant_id:
@@ -138,7 +140,7 @@ async def edit_memory_endpoint(
     
     Creates a 'manual_edit' MemoryEvent and updates the node.
     """
-    verify_twin_access(twin_id, user)
+    verify_twin_ownership(twin_id, user)
     tenant_id = user.get("tenant_id")
     
     if not tenant_id:
@@ -209,7 +211,7 @@ async def delete_memory_endpoint(
     
     Creates a 'delete' MemoryEvent for audit trail, then archives the node.
     """
-    verify_twin_access(twin_id, user)
+    verify_twin_ownership(twin_id, user)
     tenant_id = user.get("tenant_id")
     
     if not tenant_id:

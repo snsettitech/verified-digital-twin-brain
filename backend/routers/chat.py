@@ -5,7 +5,7 @@ from modules.schemas import (
     ChatRequest, ChatMetadata, ChatWidgetRequest, PublicChatRequest, 
     MessageSchema, ConversationSchema
 )
-from modules.auth_guard import get_current_user, verify_twin_access
+from modules.auth_guard import get_current_user, verify_twin_ownership, verify_conversation_ownership
 from modules.access_groups import get_user_group, get_default_group
 from modules.observability import (
     supabase, get_conversations, get_messages, 
@@ -15,7 +15,6 @@ from modules.agent import run_agent_stream
 from langchain_core.messages import HumanMessage, AIMessage
 from datetime import datetime
 import json
-import asyncio
 
 # Langfuse v3 tracing
 try:
@@ -36,7 +35,7 @@ router = APIRouter(tags=["chat"])
 @observe(name="chat_request")
 async def chat(twin_id: str, request: ChatRequest, user=Depends(get_current_user)):
     # P0: Verify user has access to this twin
-    verify_twin_access(twin_id, user)
+    verify_twin_ownership(twin_id, user)
     
     query = request.query
     conversation_id = request.conversation_id
@@ -174,19 +173,22 @@ async def chat(twin_id: str, request: ChatRequest, user=Depends(get_current_user
                 log_interaction(conversation_id, "user", query)
                 log_interaction(conversation_id, "assistant", full_response, citations, confidence_score)
             
-            # 6. Trigger Scribe (Fire-and-forget for learning)
-            from modules._core.scribe_engine import process_interaction
+            # 6. Trigger Scribe (Job Queue for reliability)
+            from modules._core.scribe_engine import enqueue_graph_extraction_job
             if full_response:
                 # Get tenant_id from user for MemoryEvent audit trail
                 tenant_id = user.get("tenant_id") if user else None
-                asyncio.create_task(process_interaction(
+                # Enqueue graph extraction job (replaces fire-and-forget)
+                job_id = enqueue_graph_extraction_job(
                     twin_id=twin_id,
                     user_message=query,
                     assistant_message=full_response,
                     history=raw_history,
                     tenant_id=tenant_id,
                     conversation_id=conversation_id
-                ))
+                )
+                if job_id:
+                    print(f"[Chat] Enqueued graph extraction job {job_id} for conversation {conversation_id}")
 
         except Exception as e:
             import traceback
@@ -197,10 +199,12 @@ async def chat(twin_id: str, request: ChatRequest, user=Depends(get_current_user
 
 @router.get("/conversations/{twin_id}")
 async def list_conversations_endpoint(twin_id: str, user=Depends(get_current_user)):
+    verify_twin_ownership(twin_id, user)
     return get_conversations(twin_id)
 
 @router.get("/conversations/{conversation_id}/messages")
 async def list_messages_endpoint(conversation_id: str, user=Depends(get_current_user)):
+    verify_conversation_ownership(conversation_id, user)
     return get_messages(conversation_id)
 
 # Chat Widget Interface
@@ -314,14 +318,22 @@ async def chat_widget(twin_id: str, request: ChatWidgetRequest, req_raw: Request
     return StreamingResponse(widget_stream_generator(), media_type="text/event-stream")
 
 @router.post("/public/chat/{twin_id}/{token}")
-async def public_chat_endpoint(twin_id: str, token: str, request: PublicChatRequest):
+async def public_chat_endpoint(twin_id: str, token: str, request: PublicChatRequest, req_raw: Request = None):
     """Handle public chat via share link"""
     from modules.share_links import validate_share_token, get_public_group_for_twin
     from modules.actions_engine import EventEmitter, TriggerMatcher, ActionDraftManager
+    from modules.rate_limiting import check_rate_limit
     
     # Validate share token
     if not validate_share_token(token, twin_id):
         raise HTTPException(status_code=403, detail="Invalid or expired share link")
+    
+    # Rate limit by IP address for public endpoints
+    client_ip = req_raw.client.host if req_raw and req_raw.client else "unknown"
+    rate_key = f"public_chat:{twin_id}:{client_ip}"
+    allowed, status = check_rate_limit(rate_key, "ip", "requests_per_minute", 10)
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Please try again later.")
     
     # Get public group for context
     public_group = get_public_group_for_twin(twin_id)

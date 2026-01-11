@@ -1,0 +1,102 @@
+# CodeRabbit Configuration
+# Focus areas for AI code review
+
+reviews:
+  # Focus on security-sensitive areas
+  focus:
+    - "Authentication and session security"
+    - "Database schema and migrations"
+    - "Permissions and Row-Level Security (RLS)"
+    - "Breaking API changes"
+    - "Missing tests for critical paths"
+
+  # Ignore generated files and vendor code
+  ignore:
+    - "**/node_modules/**"
+    - "**/__pycache__/**"
+    - "**/.next/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/*.min.js"
+    - "**/*.min.css"
+
+  # Code paths to prioritize
+  paths:
+    - "backend/modules/auth_guard.py"
+    - "backend/modules/observability.py"
+    - "backend/modules/clients.py"
+    - "backend/modules/_core/**"
+    - "backend/routers/**"
+    - "backend/database/migrations/**"
+    - "frontend/lib/**"
+    - "frontend/middleware.ts"
+
+  # File patterns to review carefully
+  patterns:
+    - "**/auth*.py"
+    - "**/auth*.ts"
+    - "**/auth*.tsx"
+    - "**/migration*.sql"
+    - "**/schema*.sql"
+    - "**/test*.py"
+    - "**/test*.ts"
+
+  # Review criteria
+  checks:
+    authentication:
+      - "JWT validation logic"
+      - "Session management"
+      - "API key validation"
+      - "Auth guard usage"
+    
+    database:
+      - "SQL injection protection"
+      - "RLS policies"
+      - "Multi-tenant filtering (tenant_id/twin_id)"
+      - "Migration idempotency"
+    
+    api:
+      - "Breaking changes"
+      - "Request/response validation"
+      - "Error handling"
+      - "Status codes"
+    
+    tests:
+      - "Missing tests for new routers"
+      - "Missing tests for auth changes"
+      - "Missing tests for schema changes"
+      - "Missing tests for permission changes"
+
+  # Comments to include in reviews
+  comments:
+    auth_warning: |
+      ⚠️ Authentication/security change detected.
+      Please ensure:
+      - Tests cover the auth flow
+      - Multi-tenant isolation is maintained
+      - No secrets or PII are logged
+    
+    schema_warning: |
+      ⚠️ Database schema change detected.
+      Please ensure:
+      - Migration is idempotent (uses IF NOT EXISTS)
+      - RLS policies are included
+      - Migration is tested in Supabase SQL Editor
+      - Multi-tenant filtering is preserved
+    
+    api_warning: |
+      ⚠️ API change detected.
+      Please ensure:
+      - No breaking changes (or explicitly documented)
+      - Request/response validation is in place
+      - Error handling is comprehensive
+      - API contracts are updated if needed
+    
+    test_warning: |
+      ⚠️ Critical change without tests.
+      Please ensure:
+      - Tests cover the new/changed functionality
+      - Auth changes have auth tests
+      - Schema changes have migration tests
+      - Permission changes have access tests
+

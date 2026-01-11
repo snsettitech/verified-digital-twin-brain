@@ -432,13 +432,19 @@ async def run_agent_stream(twin_id: str, query: str, history: List[BaseMessage] 
                 pass
 
     # 3.5 Fetch Graph Snapshot (P0.2 - Bounded, query-relevant)
+    # Feature flag: GRAPH_RAG_ENABLED (default: false)
     graph_context = ""
-    try:
-        from modules.graph_context import get_graph_snapshot
-        snapshot = await get_graph_snapshot(twin_id, query=query)
-        graph_context = snapshot.get("context_text", "")
-    except Exception as e:
-        print(f"Error fetching graph snapshot: {e}")
+    graph_rag_enabled = os.getenv("GRAPH_RAG_ENABLED", "false").lower() == "true"
+    
+    if graph_rag_enabled:
+        try:
+            from modules.graph_context import get_graph_snapshot
+            snapshot = await get_graph_snapshot(twin_id, query=query)
+            graph_context = snapshot.get("context_text", "")
+            if not graph_context:
+                print(f"[GraphRAG] Enabled but returned empty context for twin {twin_id}, query: {query[:50]}")
+        except Exception as e:
+            print(f"[GraphRAG] Retrieval failed, falling back to RAG-lite. Error: {e}")
 
     agent = create_twin_agent(twin_id, group_id=group_id, system_prompt_override=system_prompt, full_settings=settings, graph_context=graph_context)
     

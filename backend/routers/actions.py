@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Optional
-from modules.auth_guard import verify_owner, get_current_user
+from modules.auth_guard import verify_owner, get_current_user, verify_twin_ownership
 from modules.schemas import (
     EventSchema, ActionTriggerSchema, TriggerCreateRequest, TriggerUpdateRequest,
     ActionDraftSchema, DraftApproveRequest, DraftRejectRequest, DraftRespondRequest,
@@ -17,10 +17,12 @@ router = APIRouter(tags=["actions"])
 # Events
 @router.get("/twins/{twin_id}/events", response_model=List[EventSchema])
 async def list_events(twin_id: str, event_type: Optional[str] = None, limit: int = 50, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     return EventEmitter.get_recent_events(twin_id, event_type=event_type, limit=limit)
 
 @router.post("/twins/{twin_id}/events")
 async def emit_event(twin_id: str, request: EventEmitRequest, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     event_id = EventEmitter.emit(
         twin_id=twin_id,
         event_type=request.event_type,
@@ -34,10 +36,12 @@ async def emit_event(twin_id: str, request: EventEmitRequest, user=Depends(verif
 # Triggers
 @router.get("/twins/{twin_id}/triggers", response_model=List[ActionTriggerSchema])
 async def list_triggers(twin_id: str, include_inactive: bool = False, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     return TriggerManager.get_triggers(twin_id, include_inactive=include_inactive)
 
 @router.post("/twins/{twin_id}/triggers")
 async def create_trigger(twin_id: str, request: TriggerCreateRequest, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     trigger_id = TriggerManager.create_trigger(
         twin_id=twin_id,
         name=request.name,
@@ -55,6 +59,7 @@ async def create_trigger(twin_id: str, request: TriggerCreateRequest, user=Depen
 
 @router.put("/twins/{twin_id}/triggers/{trigger_id}")
 async def update_trigger(twin_id: str, trigger_id: str, request: TriggerUpdateRequest, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     updates = {k: v for k, v in request.model_dump().items() if v is not None}
     if TriggerManager.update_trigger(trigger_id, updates):
         return {"status": "success", "message": "Trigger updated"}
@@ -62,6 +67,7 @@ async def update_trigger(twin_id: str, trigger_id: str, request: TriggerUpdateRe
 
 @router.delete("/twins/{twin_id}/triggers/{trigger_id}")
 async def delete_trigger(twin_id: str, trigger_id: str, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     if TriggerManager.delete_trigger(trigger_id):
         return {"status": "success", "message": "Trigger deleted"}
     raise HTTPException(status_code=404, detail="Trigger not found")
@@ -69,10 +75,12 @@ async def delete_trigger(twin_id: str, trigger_id: str, user=Depends(verify_owne
 # Action Drafts
 @router.get("/twins/{twin_id}/action-drafts", response_model=List[ActionDraftSchema])
 async def list_action_drafts(twin_id: str, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     return ActionDraftManager.get_pending_drafts(twin_id)
 
 @router.get("/twins/{twin_id}/action-drafts-all")
 async def list_all_action_drafts(twin_id: str, status: Optional[str] = None, limit: int = 50, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     query = supabase.table("action_drafts").select(
         "*, action_triggers(name, action_type)"
     ).eq("twin_id", twin_id)
@@ -85,6 +93,7 @@ async def list_all_action_drafts(twin_id: str, status: Optional[str] = None, lim
 
 @router.get("/twins/{twin_id}/action-drafts/{draft_id}")
 async def get_action_draft(twin_id: str, draft_id: str, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     draft = ActionDraftManager.get_draft(draft_id)
     if draft:
         return draft
@@ -92,6 +101,7 @@ async def get_action_draft(twin_id: str, draft_id: str, user=Depends(verify_owne
 
 @router.post("/twins/{twin_id}/action-drafts/{draft_id}/approve")
 async def approve_action_draft(twin_id: str, draft_id: str, request: DraftApproveRequest, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     user_id = user.get("user_id")
     if ActionDraftManager.approve_draft(draft_id, user_id, request.approval_note):
         return {"status": "success", "message": "Action approved and executed"}
@@ -99,6 +109,7 @@ async def approve_action_draft(twin_id: str, draft_id: str, request: DraftApprov
 
 @router.post("/twins/{twin_id}/action-drafts/{draft_id}/reject")
 async def reject_action_draft(twin_id: str, draft_id: str, request: DraftRejectRequest, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     user_id = user.get("user_id")
     if ActionDraftManager.reject_draft(draft_id, user_id, request.rejection_note):
         return {"status": "success", "message": "Action rejected"}
@@ -106,6 +117,7 @@ async def reject_action_draft(twin_id: str, draft_id: str, request: DraftRejectR
 
 @router.post("/twins/{twin_id}/action-drafts/{draft_id}/respond")
 async def respond_to_action_draft(twin_id: str, draft_id: str, request: DraftRespondRequest, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     user_id = user.get("user_id")
     result = ActionDraftManager.respond_to_draft(
         draft_id, 
@@ -120,10 +132,12 @@ async def respond_to_action_draft(twin_id: str, draft_id: str, request: DraftRes
 # Execution Logs
 @router.get("/twins/{twin_id}/executions", response_model=List[ActionExecutionSchema])
 async def list_executions(twin_id: str, action_type: Optional[str] = None, status: Optional[str] = None, limit: int = 50, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     return ActionExecutor.get_executions(twin_id, action_type=action_type, status=status, limit=limit)
 
 @router.get("/twins/{twin_id}/executions/{execution_id}")
 async def get_execution_details(twin_id: str, execution_id: str, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     execution = ActionExecutor.get_execution_details(execution_id)
     if execution:
         return execution
@@ -132,10 +146,12 @@ async def get_execution_details(twin_id: str, execution_id: str, user=Depends(ve
 # Connectors
 @router.get("/twins/{twin_id}/connectors", response_model=List[ToolConnectorSchema])
 async def list_connectors(twin_id: str, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     return ConnectorManager.get_connectors(twin_id)
 
 @router.post("/twins/{twin_id}/connectors")
 async def create_connector(twin_id: str, request: ConnectorCreateRequest, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     connector_id = ConnectorManager.create_connector(
         twin_id=twin_id,
         connector_type=request.connector_type,
@@ -148,10 +164,12 @@ async def create_connector(twin_id: str, request: ConnectorCreateRequest, user=D
 
 @router.delete("/twins/{twin_id}/connectors/{connector_id}")
 async def delete_connector(twin_id: str, connector_id: str, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     if ConnectorManager.delete_connector(connector_id):
         return {"status": "success", "message": "Connector deleted"}
     raise HTTPException(status_code=404, detail="Connector not found")
 
 @router.post("/twins/{twin_id}/connectors/{connector_id}/test", response_model=ConnectorTestResponse)
 async def test_connector(twin_id: str, connector_id: str, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     return ConnectorManager.test_connector(connector_id)

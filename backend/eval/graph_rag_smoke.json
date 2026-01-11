@@ -1,0 +1,148 @@
+{
+    "name": "graphrag_smoke_test",
+    "version": "1.0",
+    "description": "Smoke test dataset for GraphRAG - 20 questions that work in RAG-lite",
+    "questions": [
+        {
+            "id": "q001",
+            "category": "factual_recall",
+            "question": "What is my favorite programming language?",
+            "context_needed": ["preference", "technology"],
+            "ground_truth": "Based on memorized knowledge about programming preferences"
+        },
+        {
+            "id": "q002",
+            "category": "factual_recall",
+            "question": "Where do I work?",
+            "context_needed": ["company", "employment"],
+            "ground_truth": "Based on employment information in graph"
+        },
+        {
+            "id": "q003",
+            "category": "factual_recall",
+            "question": "What are my main professional interests?",
+            "context_needed": ["interest", "skill", "topic"],
+            "ground_truth": "Based on interests and skills in graph"
+        },
+        {
+            "id": "q004",
+            "category": "relationship",
+            "question": "How is my work related to AI?",
+            "context_needed": ["employment", "technology", "relationship"],
+            "ground_truth": "Requires traversing employment -> skills/interests -> AI topic"
+        },
+        {
+            "id": "q005",
+            "category": "relationship",
+            "question": "Who do I know that works in venture capital?",
+            "context_needed": ["person", "company", "relationship"],
+            "ground_truth": "Requires relationship traversal between people and companies"
+        },
+        {
+            "id": "q006",
+            "category": "preference",
+            "question": "Do I prefer early stage or late stage investments?",
+            "context_needed": ["preference", "investment"],
+            "ground_truth": "Based on investment preference nodes"
+        },
+        {
+            "id": "q007",
+            "category": "preference",
+            "question": "What type of meetings do I find most valuable?",
+            "context_needed": ["preference", "meeting", "work_style"],
+            "ground_truth": "Based on work style and meeting preferences"
+        },
+        {
+            "id": "q010",
+            "category": "factual_recall",
+            "question": "What was my previous job before my current role?",
+            "context_needed": ["employment", "history"],
+            "ground_truth": "Based on employment history in graph"
+        },
+        {
+            "id": "q011",
+            "category": "factual_recall",
+            "question": "What university did I attend?",
+            "context_needed": ["education"],
+            "ground_truth": "Based on education nodes"
+        },
+        {
+            "id": "q012",
+            "category": "preference",
+            "question": "What time do I prefer to have meetings?",
+            "context_needed": ["preference", "schedule"],
+            "ground_truth": "Based on schedule/work preferences"
+        },
+        {
+            "id": "q013",
+            "category": "relationship",
+            "question": "What companies have I invested in?",
+            "context_needed": ["investment", "company", "relationship"],
+            "ground_truth": "Requires investment relationship traversal"
+        },
+        {
+            "id": "q014",
+            "category": "factual_recall",
+            "question": "What technologies am I most experienced with?",
+            "context_needed": ["skill", "technology"],
+            "ground_truth": "Based on skill/technology nodes"
+        },
+        {
+            "id": "q015",
+            "category": "preference",
+            "question": "Do I prefer remote or in-person work?",
+            "context_needed": ["preference", "work_style"],
+            "ground_truth": "Based on work style preferences"
+        },
+        {
+            "id": "q016",
+            "category": "relationship",
+            "question": "What projects am I currently working on?",
+            "context_needed": ["project", "current_work"],
+            "ground_truth": "Based on current project relationships"
+        },
+        {
+            "id": "q018",
+            "category": "factual_recall",
+            "question": "What is my email address?",
+            "context_needed": ["contact"],
+            "ground_truth": "Based on contact information nodes"
+        },
+        {
+            "id": "q019",
+            "category": "preference",
+            "question": "What kind of books do I like to read?",
+            "context_needed": ["preference", "hobby"],
+            "ground_truth": "Based on hobby/interest preferences"
+        },
+        {
+            "id": "q020",
+            "category": "relationship",
+            "question": "Who are my key mentors or advisors?",
+            "context_needed": ["person", "relationship"],
+            "ground_truth": "Based on mentor/advisor relationships"
+        },
+        {
+            "id": "q008",
+            "category": "unknown",
+            "question": "What is the capital of France?",
+            "context_needed": [],
+            "ground_truth": "Should NOT answer - general knowledge not in graph"
+        },
+        {
+            "id": "q009",
+            "category": "unknown",
+            "question": "What stocks should I buy?",
+            "context_needed": [],
+            "ground_truth": "Should refuse - financial advice not in scope"
+        },
+        {
+            "id": "q017",
+            "category": "edge_case",
+            "question": "Tell me about my childhood memories",
+            "context_needed": [],
+            "ground_truth": "Should acknowledge lack of this information"
+        }
+    ]
+}
+

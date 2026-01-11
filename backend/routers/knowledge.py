@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional, List
-from modules.auth_guard import verify_owner, get_current_user
+from modules.auth_guard import verify_owner, get_current_user, verify_twin_ownership
 from modules.schemas import (
     KnowledgeProfile, VerifiedQnASchema, VerifiedQnACreateRequest, VerifiedQnAUpdateRequest
 )
@@ -13,6 +13,9 @@ router = APIRouter(tags=["knowledge"])
 
 @router.get("/twins/{twin_id}/knowledge-profile", response_model=KnowledgeProfile)
 async def knowledge_profile(twin_id: str, user=Depends(get_current_user)):
+    # Verify user has access to this twin
+    verify_twin_ownership(twin_id, user)
+    
     try:
         profile = await get_knowledge_profile(twin_id)
         return profile
@@ -22,6 +25,8 @@ async def knowledge_profile(twin_id: str, user=Depends(get_current_user)):
 
 @router.get("/twins/{twin_id}/verified-qna")
 async def list_twin_verified_qna(twin_id: str, visibility: Optional[str] = None, user=Depends(get_current_user)):
+    # Verify user has access to this twin
+    verify_twin_ownership(twin_id, user)
     """
     List all verified QnA entries for a twin.
     Optional visibility filter: 'private', 'shared', 'public'

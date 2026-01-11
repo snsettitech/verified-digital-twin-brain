@@ -31,10 +31,16 @@ async def process_queue():
             
             if job:
                 job_id = job["job_id"]
-                print(f"Processing job {job_id} (type: {job['job_type']}, priority: {job['priority']})")
+                job_type = job["job_type"]
+                print(f"Processing job {job_id} (type: {job_type}, priority: {job['priority']})")
                 
-                # Process the job
-                success = await process_training_job(job_id)
+                # Route to appropriate processor based on job type
+                if job_type == "graph_extraction":
+                    from modules._core.scribe_engine import process_graph_extraction_job
+                    success = await process_graph_extraction_job(job_id)
+                else:
+                    # Default to training job processor (ingestion, reindex, health_check)
+                    success = await process_training_job(job_id)
                 
                 if success:
                     print(f"Job {job_id} completed successfully")
@@ -58,12 +64,29 @@ async def process_queue():
 async def process_single_job(job_id: str):
     """
     Process a single job by ID (for on-demand processing via API).
+    Routes to appropriate processor based on job type.
     
     Args:
         job_id: Job UUID to process
     """
+    from modules.observability import supabase
     try:
-        success = await process_training_job(job_id)
+        # Get job details to determine type
+        job_result = supabase.table("jobs").select("job_type").eq("id", job_id).single().execute()
+        if not job_result.data:
+            print(f"Job {job_id} not found")
+            return False
+        
+        job_type = job_result.data.get("job_type")
+        
+        # Route to appropriate processor
+        if job_type == "graph_extraction":
+            from modules._core.scribe_engine import process_graph_extraction_job
+            success = await process_graph_extraction_job(job_id)
+        else:
+            # Default to training job processor
+            success = await process_training_job(job_id)
+        
         return success
     except Exception as e:
         print(f"Error processing job {job_id}: {e}")

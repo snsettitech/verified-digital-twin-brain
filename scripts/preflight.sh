@@ -37,6 +37,9 @@ npm ci --silent
 echo "→ Running lint..."
 npm run lint
 
+echo "→ Running typecheck..."
+npm run typecheck
+
 echo "→ Running build..."
 npm run build
 

@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import json
 
-from modules.auth_guard import get_current_user
+from modules.auth_guard import get_current_user, verify_twin_ownership
 from modules.observability import supabase, get_messages, log_interaction, create_conversation
 from modules.agent import run_agent_stream
 from modules._core.host_engine import get_next_slot, get_next_question, process_turn
@@ -410,6 +410,8 @@ async def get_cognitive_graph(twin_id: str, user=Depends(get_current_user)):
         - edges: List of cognitive graph edges
         - clusters: Cluster completion percentages
     """
+    verify_twin_ownership(twin_id, user)
+    
     # TODO: Implement actual graph store query
     # For now return a placeholder structure
     return {
@@ -448,6 +450,8 @@ async def approve_profile(twin_id: str, request: ApproveRequest = None, user=Dep
     This captures all nodes and edges at the current moment, computes a diff
     from the previous version, and creates an audit trail.
     """
+    verify_twin_ownership(twin_id, user)
+    
     from modules._core.versioning import compute_diff, create_snapshot, summarize_diff
     from datetime import datetime
     
@@ -537,6 +541,8 @@ async def get_versions(twin_id: str, limit: int = 10, user=Depends(get_current_u
     
     Returns list of all approved versions with metadata.
     """
+    verify_twin_ownership(twin_id, user)
+    
     from modules._core.versioning import summarize_diff
     
     try:
@@ -573,6 +579,8 @@ async def get_version_snapshot(twin_id: str, version: int, user=Depends(get_curr
     
     Returns the complete graph state as it was when approved.
     """
+    verify_twin_ownership(twin_id, user)
+    
     try:
         versions_res = supabase.rpc("get_profile_versions_system", {"t_id": twin_id, "limit_val": 100}).execute()
         
@@ -604,6 +612,8 @@ async def delete_version(twin_id: str, version: int, user=Depends(get_current_us
     
     Note: This should be used sparingly as versions are meant to be immutable audit records.
     """
+    verify_twin_ownership(twin_id, user)
+    
     try:
         result = supabase.rpc("delete_profile_version_system", {"t_id": twin_id, "ver": version}).execute()
         
@@ -626,6 +636,8 @@ async def delete_all_versions(twin_id: str, user=Depends(get_current_user)):
     
     Warning: This removes all version history and cannot be undone.
     """
+    verify_twin_ownership(twin_id, user)
+    
     try:
         result = supabase.rpc("delete_all_versions_system", {"t_id": twin_id}).execute()
         deleted_count = result.data if result.data else 0

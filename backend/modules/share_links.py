@@ -75,12 +75,17 @@ def regenerate_share_token(twin_id: str) -> str:
 def validate_share_token(token: str, twin_id: str) -> bool:
     """
     Validate that a share token matches the twin and sharing is enabled.
+    Includes expiry check and audit logging.
     """
+    from datetime import datetime
+    
     try:
         # Get twin settings
         twin_response = supabase.table("twins").select("settings").eq("id", twin_id).single().execute()
         
         if not twin_response.data:
+            AuditLogger.log(twin_id, "SECURITY", "SHARE_TOKEN_INVALID", 
+                          metadata={"reason": "twin_not_found", "token_prefix": token[:8] if token else "none"})
             return False
         
         settings = twin_response.data.get("settings", {})
@@ -88,12 +93,31 @@ def validate_share_token(token: str, twin_id: str) -> bool:
         
         # Check if sharing is enabled
         if not widget_settings.get("public_share_enabled", False):
+            AuditLogger.log(twin_id, "SECURITY", "SHARE_TOKEN_INVALID", 
+                          metadata={"reason": "sharing_disabled"})
             return False
         
         # Check if token matches
         stored_token = widget_settings.get("share_token")
         if stored_token != token:
+            AuditLogger.log(twin_id, "SECURITY", "SHARE_TOKEN_INVALID", 
+                          metadata={"reason": "token_mismatch", "token_prefix": token[:8] if token else "none"})
             return False
+        
+        # Check expiry if set
+        expires_at_str = widget_settings.get("share_token_expires_at")
+        if expires_at_str:
+            try:
+                expires_at = datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
+                if datetime.now(expires_at.tzinfo) > expires_at:
+                    AuditLogger.log(twin_id, "SECURITY", "SHARE_TOKEN_EXPIRED", 
+                                  metadata={"expired_at": expires_at_str})
+                    return False
+            except Exception as parse_err:
+                print(f"Error parsing share token expiry: {parse_err}")
+        
+        # Log successful access (at reduced frequency to avoid log spam)
+        # AuditLogger.log(twin_id, "ACCESS", "SHARE_LINK_ACCESSED", metadata={})
         
         return True
     except Exception as e:

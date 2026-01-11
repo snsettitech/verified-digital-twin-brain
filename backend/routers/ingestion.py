@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from modules.auth_guard import verify_owner, get_current_user
+from modules.auth_guard import verify_owner, get_current_user, verify_twin_ownership, verify_source_ownership
 from modules.schemas import (
     YouTubeIngestRequest, PodcastIngestRequest, XThreadIngestRequest,
     SourceRejectRequest, BulkApproveRequest, BulkUpdateRequest
@@ -21,6 +21,7 @@ router = APIRouter(tags=["ingestion"])
 
 @router.post("/ingest/youtube/{twin_id}")
 async def ingest_youtube(twin_id: str, request: YouTubeIngestRequest, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     source_id = str(uuid.uuid4())
     try:
         num_chunks = await ingest_youtube_transcript(source_id, twin_id, request.url)
@@ -30,6 +31,7 @@ async def ingest_youtube(twin_id: str, request: YouTubeIngestRequest, user=Depen
 
 @router.post("/ingest/podcast/{twin_id}")
 async def ingest_podcast(twin_id: str, request: PodcastIngestRequest, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     source_id = str(uuid.uuid4())
     try:
         num_chunks = await ingest_podcast_rss(source_id, twin_id, request.url)
@@ -39,6 +41,7 @@ async def ingest_podcast(twin_id: str, request: PodcastIngestRequest, user=Depen
 
 @router.post("/ingest/x/{twin_id}")
 async def ingest_x(twin_id: str, request: XThreadIngestRequest, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     source_id = str(uuid.uuid4())
     try:
         num_chunks = await ingest_x_thread(source_id, twin_id, request.url)
@@ -48,6 +51,7 @@ async def ingest_x(twin_id: str, request: XThreadIngestRequest, user=Depends(ver
 
 @router.post("/ingest/{twin_id}")
 async def ingest(twin_id: str, file: UploadFile = File(...), user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     # Save file temporarily
     temp_dir = "temp_uploads"
     os.makedirs(temp_dir, exist_ok=True)
@@ -67,6 +71,7 @@ async def ingest(twin_id: str, file: UploadFile = File(...), user=Depends(verify
 
 @router.delete("/sources/{twin_id}/{source_id}")
 async def remove_source(twin_id: str, source_id: str, user=Depends(verify_owner)):
+    verify_twin_ownership(twin_id, user)
     try:
         await delete_source(source_id, twin_id)
         return {"status": "success"}
@@ -75,11 +80,14 @@ async def remove_source(twin_id: str, source_id: str, user=Depends(verify_owner)
 
 @router.get("/sources/{twin_id}")
 async def list_sources(twin_id: str, user=Depends(get_current_user)):
+    # Verify user has access to this twin
+    verify_twin_ownership(twin_id, user)
     return get_sources(twin_id)
 
 @router.post("/sources/{source_id}/approve")
 async def approve_source_endpoint(source_id: str, user=Depends(verify_owner)):
     """Approve staged source → creates training job"""
+    verify_source_ownership(source_id, user)
     try:
         job_id = await approve_source(source_id)
         return {"status": "success", "job_id": job_id, "message": "Source approved, training job created"}
@@ -91,6 +99,7 @@ async def approve_source_endpoint(source_id: str, user=Depends(verify_owner)):
 @router.post("/sources/{source_id}/reject")
 async def reject_source_endpoint(source_id: str, request: SourceRejectRequest, user=Depends(verify_owner)):
     """Reject source with reason"""
+    verify_source_ownership(source_id, user)
     try:
         await reject_source(source_id, request.reason)
         return {"status": "success", "message": "Source rejected"}
@@ -102,6 +111,9 @@ async def reject_source_endpoint(source_id: str, request: SourceRejectRequest, u
 @router.post("/sources/bulk-approve")
 async def bulk_approve_sources_endpoint(request: BulkApproveRequest, user=Depends(verify_owner)):
     """Bulk approve multiple sources"""
+    # Verify ownership of all sources
+    for source_id in request.source_ids:
+        verify_source_ownership(source_id, user)
     try:
         results = await bulk_approve_sources(request.source_ids)
         return {"status": "success", "results": results}
@@ -111,6 +123,9 @@ async def bulk_approve_sources_endpoint(request: BulkApproveRequest, user=Depend
 @router.post("/sources/bulk-update")
 async def bulk_update_sources_endpoint(request: BulkUpdateRequest, user=Depends(verify_owner)):
     """Bulk update metadata (access group, publish_date, author, citation_url, visibility)"""
+    # Verify ownership of all sources
+    for source_id in request.source_ids:
+        verify_source_ownership(source_id, user)
     try:
         await bulk_update_source_metadata(request.source_ids, request.metadata)
         return {"status": "success", "message": f"Updated {len(request.source_ids)} source(s)"}
@@ -120,6 +135,7 @@ async def bulk_update_sources_endpoint(request: BulkUpdateRequest, user=Depends(
 @router.get("/sources/{source_id}/health")
 async def get_source_health(source_id: str, user=Depends(get_current_user)):
     """Get health check results for a source"""
+    verify_source_ownership(source_id, user)
     try:
         health_status = get_source_health_status(source_id)
         return health_status
@@ -129,6 +145,7 @@ async def get_source_health(source_id: str, user=Depends(get_current_user)):
 @router.get("/sources/{source_id}/logs")
 async def get_source_logs(source_id: str, limit: int = 100, user=Depends(get_current_user)):
     """Get ingestion logs for a source"""
+    verify_source_ownership(source_id, user)
     try:
         logs = get_ingestion_logs(source_id, limit=limit)
         return logs
@@ -252,6 +269,7 @@ async def retry_training_job(job_id: str, user=Depends(verify_owner)):
 @router.get("/dead-letter-queue")
 async def get_dead_letter_queue_endpoint(twin_id: str, user=Depends(verify_owner)):
     """List sources needing attention"""
+    verify_twin_ownership(twin_id, user)
     try:
         sources = get_dead_letter_queue(twin_id)
         return sources
@@ -261,8 +279,9 @@ async def get_dead_letter_queue_endpoint(twin_id: str, user=Depends(verify_owner
 @router.post("/sources/{source_id}/retry")
 async def retry_source_ingestion(source_id: str, user=Depends(verify_owner)):
     """Retry failed ingestion"""
+    verify_source_ownership(source_id, user)
     try:
-        # Get twin_id from source
+        # Get twin_id from source (already verified by verify_source_ownership, but need it for the function call)
         source_response = supabase.table("sources").select("twin_id").eq("id", source_id).single().execute()
         if not source_response.data:
             raise HTTPException(status_code=404, detail="Source not found")

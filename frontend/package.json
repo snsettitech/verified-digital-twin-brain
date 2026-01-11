@@ -3,14 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=20.0.0",
+    "node": "20.x",
     "npm": ">=10.0.0"
   },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "prepare": "husky"
   },
   "dependencies": {
     "@playwright/test": "^1.57.0",
@@ -28,7 +30,14 @@
     "eslint": "^9",
     "eslint-config-next": "16.0.10",
     "eslint-plugin-react-compiler": "^19.1.0-rc.2",
+    "husky": "^9.0.0",
+    "lint-staged": "^15.2.0",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx}": [
+      "eslint --fix"
+    ]
   }
 }
